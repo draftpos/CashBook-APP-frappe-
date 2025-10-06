@@ -1,0 +1,113 @@
+{
+ "actions": [],
+ "allow_rename": 1,
+ "creation": "2025-10-03 11:09:22.766590",
+ "doctype": "DocType",
+ "engine": "InnoDB",
+ "field_order": [
+  "account_type",
+  "series",
+  "column_break_gjxr",
+  "company",
+  "account",
+  "section_break_aeof",
+  "accounting_entries",
+  "section_break_rqwt",
+  "reference_date",
+  "reference",
+  "amended_from"
+ ],
+ "fields": [
+  {
+   "fieldname": "account_type",
+   "fieldtype": "Select",
+   "label": "Account Type",
+   "options": "Cash Entry\nBank Entry"
+  },
+  {
+   "fieldname": "series",
+   "fieldtype": "Select",
+   "label": "Series",
+   "options": "CB-.YYYY.-.\nCB-.YY.-."
+  },
+  {
+   "fieldname": "column_break_gjxr",
+   "fieldtype": "Column Break"
+  },
+  {
+   "fieldname": "company",
+   "fieldtype": "Link",
+   "label": "Company",
+   "options": "Company"
+  },
+  {
+   "fieldname": "account",
+   "fieldtype": "Link",
+   "in_list_view": 1,
+   "label": "Account",
+   "options": "Account",
+   "reqd": 1
+  },
+  {
+   "fieldname": "section_break_aeof",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "accounting_entries",
+   "fieldtype": "Table",
+   "options": "Cash Book Account"
+  },
+  {
+   "fieldname": "section_break_rqwt",
+   "fieldtype": "Section Break"
+  },
+  {
+   "fieldname": "reference_date",
+   "fieldtype": "Data",
+   "label": "Reference Date"
+  },
+  {
+   "fieldname": "reference",
+   "fieldtype": "Data",
+   "label": "Reference"
+  },
+  {
+   "fieldname": "amended_from",
+   "fieldtype": "Link",
+   "label": "Amended From",
+   "no_copy": 1,
+   "options": "Cash Book Entry",
+   "print_hide": 1,
+   "read_only": 1,
+   "search_index": 1
+  }
+ ],
+ "grid_page_length": 50,
+ "index_web_pages_for_search": 1,
+ "is_submittable": 1,
+ "links": [],
+ "modified": "2025-10-06 09:04:42.673884",
+ "modified_by": "Administrator",
+ "module": "Cah Book",
+ "name": "Cash Book Entry",
+ "owner": "Administrator",
+ "permissions": [
+  {
+   "create": 1,
+   "delete": 1,
+   "email": 1,
+   "export": 1,
+   "print": 1,
+   "read": 1,
+   "report": 1,
+   "role": "System Manager",
+   "share": 1,
+   "write": 1
+  }
+ ],
+ "row_format": "Dynamic",
+ "rows_threshold_for_grid_search": 20,
+ "sort_field": "modified",
+ "sort_order": "DESC",
+ "states": []
+}
