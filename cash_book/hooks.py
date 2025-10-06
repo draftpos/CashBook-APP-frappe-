@@ -242,3 +242,7 @@ app_license = "mit"
 # 	"Logging DocType Name": 30  # days to retain logs
 # }
 
+fixtures = [
+    {"dt": "Custom Field", "filters": [["dt", "in", ["Cash Book Entry", "Cash Book Account"]]]},
+    {"dt": "Client Script", "filters": [["dt", "in", ["Cash Book Entry", "Cash Book Account"]]]}
+]
