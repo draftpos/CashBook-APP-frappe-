@@ -13,14 +13,11 @@ class CashBookEntry(Document):
             "reference_date",
             "reference"
         ]
-
         missing_main = [field for field in required_fields if not self.get(field)]
-
         # ✅ Validate child table
         child_table_name = "accounting_entries"
         if not self.get(child_table_name):
             frappe.throw("Please add at least one row in 'Cash Book Account' before saving.")
-
         missing_child_rows = []
         for idx, row in enumerate(self.get(child_table_name), start=1):
             required_child_fields = ["party_type", "party"]
@@ -28,18 +25,14 @@ class CashBookEntry(Document):
 
             debit = row.get("debit")
             credit = row.get("credit")
-
             # Must have one of the two
             if not debit and not credit:
                 missing_child_fields.append("Missing Debit or Credit")
-
             # Cannot have both at once
             if debit and credit:
                 missing_child_fields.append("only one of Debit or Credit (not both)")
-
             if missing_child_fields:
                 missing_child_rows.append(f"Row {idx}: {', '.join(missing_child_fields)}")
-
         # ✅ Throw if anything missing
         if missing_main or missing_child_rows:
             msg = ""
@@ -48,7 +41,6 @@ class CashBookEntry(Document):
             if missing_child_rows:
                 msg += "<b>Issues in child table:</b><br>" + "<br>".join(missing_child_rows)
             frappe.throw(msg)
-
 
     # def on_submit(self):
     #    # -------------------
@@ -59,9 +51,6 @@ class CashBookEntry(Document):
     #     reference = self.get("reference")
     #     series = self.get("series")
     #     main_account = self.get("account")
-
-
-
     #     print(f"acount after save -----------------{main_account}")
 
     #     # Prepare accounts from child table
@@ -98,15 +87,10 @@ class CashBookEntry(Document):
 
 
 # ---------------------------------------------custom logic to test
-
     def on_submit(self):
            # After save: create Journal Entry --------------------------------------------------------------------------------
     #     # -------------------
-        
-
         series = self.get("series")
-
-
         frappe.db.savepoint("before_cashbook_submit")
         try:
             # Group child rows by post_date
@@ -158,9 +142,6 @@ def create_custom_journal_entry(company,account_type,main_account, posting_date,
     je.remarks = remarks
 
     print(f"---------------------------main account-----------{main_account}")
-
-
-
     # Add accounts to the Journal Entry
     for acc in accounts:
         je.append("accounts", {
@@ -187,16 +168,10 @@ def create_custom_journal_entry(company,account_type,main_account, posting_date,
             "account":main_account,
             "credit_in_account_currency": acc.get("debit"),
             })
-           
-
     # Save and submit the Journal Entry
     je.save()
     je.submit()
-
     return f"Journal Entry {je.name} created successfully!"
-
-
-
 
 def get_account_query(doctype, txt, searchfield, start, page_len, filters):
     print("Custom get_account_query called!-------------------------------------")
