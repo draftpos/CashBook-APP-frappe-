@@ -146,19 +146,6 @@ class CashBookEntry(Document):
             frappe.db.rollback(save_point="before_cashbook_submit")
             frappe.throw(f"❌ Journal creation failed: {str(e)}. Cash Book not submitted.")
 
-
-   
-
-
-
-
-
-
-
-
-
-
-
 @frappe.whitelist()
 def create_custom_journal_entry(company,account_type,main_account, posting_date, accounts, reference=None,reference_date=None, remarks=None):
     # Create new Journal Entry document
