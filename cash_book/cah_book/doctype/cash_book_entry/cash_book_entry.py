@@ -155,7 +155,7 @@ def create_custom_journal_entry(company,account_type,main_account, posting_date,
             "user_remark" :acc.get("user_remark")
         })
 
-        print(f"the final either debit or credit----------------debit--{acc.get("debit")} and credit {acc.get("credit")}")
+
         if acc.get("debit") == 0:
 
             je.append("accounts", {
