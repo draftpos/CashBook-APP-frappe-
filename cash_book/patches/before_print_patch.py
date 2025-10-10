@@ -2,6 +2,8 @@ import frappe
 from frappe.utils.safe_exec import safe_exec
 
 def safe_before_print(doc, method=None, settings=None):
+    frappe.msgprint("print check")
+
     try:
         # Only patch these doctypes
         if doc.doctype in [
