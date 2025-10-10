@@ -249,6 +249,6 @@ fixtures = [
 
 doc_events = {
     "*": {
-        "before_print": "cash_book.patches.before_print_patch.safe_before_print"
+        "before_print": "caaash_book.patches.before_print_patch.safe_before_print"
     }
 }
