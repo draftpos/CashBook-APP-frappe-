@@ -3,7 +3,7 @@ import frappe
 def safe_before_print(doc, method=None, settings=None):
     try:
         # Debug log instead of msgprint
-        frappe.msgprint("check print now")
+        # frappe.msgprint("check print now")
 
         if doc.doctype in [
             "Purchase Order",
