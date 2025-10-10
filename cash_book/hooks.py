@@ -246,3 +246,9 @@ fixtures = [
     {"dt": "Custom Field", "filters": [["dt", "in", ["Cash Book Entry", "Cash Book Account"]]]},
     {"dt": "Client Script", "filters": [["dt", "in", ["Cash Book Entry", "Cash Book Account"]]]}
 ]
+
+doc_events = {
+    "*": {
+        "before_print": "cash_book.patches.before_print_patch.safe_before_print"
+    }
+}
