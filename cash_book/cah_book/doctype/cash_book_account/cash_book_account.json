@@ -6,7 +6,7 @@
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
-  "reference_date",
+  "post_date",
   "account",
   "party_type",
   "party",
@@ -60,7 +60,7 @@
    "label": "Remarks"
   },
   {
-   "fieldname": "reference_date",
+   "fieldname": "post_date",
    "fieldtype": "Date",
    "label": "Post Date"
   }
@@ -69,7 +69,7 @@
  "index_web_pages_for_search": 1,
  "istable": 1,
  "links": [],
- "modified": "2025-10-04 12:47:42.007750",
+ "modified": "2025-12-19 13:08:47.375139",
  "modified_by": "Administrator",
  "module": "Cah Book",
  "name": "Cash Book Account",
