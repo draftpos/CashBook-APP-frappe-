@@ -6,7 +6,7 @@
  "editable_grid": 1,
  "engine": "InnoDB",
  "field_order": [
-  "reference_date",
+  "post_date",
   "account",
   "party_type",
   "party",
@@ -20,8 +20,11 @@
    "bold": 1,
    "fieldname": "account",
    "fieldtype": "Link",
+   "in_filter": 1,
    "in_global_search": 1,
    "in_list_view": 1,
+   "in_preview": 1,
+   "in_standard_filter": 1,
    "label": "Account",
    "options": "Account"
   },
@@ -36,32 +39,59 @@
   {
    "fieldname": "party",
    "fieldtype": "Dynamic Link",
+   "in_filter": 1,
+   "in_global_search": 1,
+   "in_list_view": 1,
+   "in_preview": 1,
+   "in_standard_filter": 1,
    "label": "Party",
    "options": "party_type"
   },
   {
    "fieldname": "debit",
    "fieldtype": "Data",
+   "in_filter": 1,
+   "in_list_view": 1,
+   "in_preview": 1,
+   "in_standard_filter": 1,
    "label": "Debit"
   },
   {
    "fieldname": "credit",
    "fieldtype": "Data",
+   "in_filter": 1,
+   "in_list_view": 1,
+   "in_preview": 1,
+   "in_standard_filter": 1,
    "label": "Credit"
   },
   {
    "fieldname": "reference",
    "fieldtype": "Data",
+   "in_filter": 1,
+   "in_global_search": 1,
+   "in_list_view": 1,
+   "in_preview": 1,
+   "in_standard_filter": 1,
    "label": "Reference"
   },
   {
    "fieldname": "remarks",
    "fieldtype": "Data",
+   "in_filter": 1,
+   "in_global_search": 1,
+   "in_list_view": 1,
+   "in_preview": 1,
+   "in_standard_filter": 1,
    "label": "Remarks"
   },
   {
-   "fieldname": "reference_date",
+   "fieldname": "post_date",
    "fieldtype": "Date",
+   "in_filter": 1,
+   "in_list_view": 1,
+   "in_preview": 1,
+   "in_standard_filter": 1,
    "label": "Post Date"
   }
  ],
@@ -69,7 +99,7 @@
  "index_web_pages_for_search": 1,
  "istable": 1,
  "links": [],
- "modified": "2025-10-04 12:47:42.007750",
+ "modified": "2025-12-06 19:11:35.936427",
  "modified_by": "Administrator",
  "module": "Cah Book",
  "name": "Cash Book Account",
