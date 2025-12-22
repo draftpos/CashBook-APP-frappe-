@@ -47,7 +47,7 @@ class CashBookEntry(Document):
     #     # After save: create Journal Entry --------------------------------------------------------------------------------
     #     # -------------------
     #     company = self.get("company")
-    #     reference_date = self.get("reference_date")
+    #     reference_date = self.get("reference_date").
     #     reference = self.get("reference")
     #     series = self.get("series")
     #     main_account = self.get("account")
