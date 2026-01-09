@@ -31,6 +31,8 @@ class CashBookEntry(Document):
             # Cannot have both at once
             if debit and credit:
                 missing_child_fields.append("only one of Debit or Credit (not both)")
+            if row.get("account") == self.account:
+                missing_child_fields.append(f"Child account cannot be same as parent account ({self.account})")
             if missing_child_fields:
                 missing_child_rows.append(f"Row {idx}: {', '.join(missing_child_fields)}")
         # ✅ Throw if anything missing
@@ -91,6 +93,8 @@ class CashBookEntry(Document):
            # After save: create Journal Entry --------------------------------------------------------------------------------
     #     # -------------------
         series = self.get("series")
+        name=self.name
+        print(f"Cash Book Entry Name: {name}")
         frappe.db.savepoint("before_cashbook_submit")
         try:
             # Group child rows by post_date
@@ -120,7 +124,8 @@ class CashBookEntry(Document):
                     accounts=accounts,
                     reference=self.reference,
                     reference_date=self.reference_date,
-                    remarks=f"Generated from Cash Book Entry {self.name}"
+                    remarks=f"Generated from Cash Book Entry {self.name}",
+                    custom_cashbook_entry_ref=name
                 )
 
             frappe.db.commit()
@@ -131,7 +136,7 @@ class CashBookEntry(Document):
             frappe.throw(f"❌ Journal creation failed: {str(e)}. Cash Book not submitted.")
 
 @frappe.whitelist()
-def create_custom_journal_entry(company,account_type,main_account, posting_date, accounts, reference=None,reference_date=None, remarks=None):
+def create_custom_journal_entry(company,account_type,main_account, posting_date, accounts, custom_cashbook_entry_ref,reference=None,reference_date=None, remarks=None):
     # Create new Journal Entry document
     je = frappe.new_doc("Journal Entry")
     je.voucher_type = account_type
@@ -140,6 +145,7 @@ def create_custom_journal_entry(company,account_type,main_account, posting_date,
     je.cheque_no = reference
     je.cheque_date= getdate(reference_date)
     je.remarks = remarks
+    je.custom_cashbook_entry_ref = custom_cashbook_entry_ref
 
     print(f"---------------------------main account-----------{main_account}")
     # Add accounts to the Journal Entry
@@ -152,7 +158,8 @@ def create_custom_journal_entry(company,account_type,main_account, posting_date,
             "party": acc.get("reference"),
             "party": acc.get("party"),
             "reference_": acc.get("reference"),
-            "user_remark" :acc.get("user_remark")
+            "user_remark" :acc.get("user_remark"),
+     
         })
 
 
