@@ -125,7 +125,9 @@ class CashBookEntry(Document):
                     reference=self.reference,
                     reference_date=self.reference_date,
                     remarks=f"Generated from Cash Book Entry {self.name}",
-                    custom_cashbook_entry_ref=name
+                    custom_cashbook_entry_ref=name,
+                    cost_center=self.get("cost_center"),
+                    project=self.get("project")
                 )
 
             frappe.db.commit()
@@ -136,44 +138,65 @@ class CashBookEntry(Document):
             frappe.throw(f"❌ Journal creation failed: {str(e)}. Cash Book not submitted.")
 
 @frappe.whitelist()
-def create_custom_journal_entry(company,account_type,main_account, posting_date, accounts, custom_cashbook_entry_ref,reference=None,reference_date=None, remarks=None):
+def create_custom_journal_entry(company, account_type, main_account, posting_date, accounts, custom_cashbook_entry_ref, reference=None, reference_date=None, remarks=None, cost_center=None, project=None):
+    # Detect if multi-currency is needed
+    company_currency = frappe.get_cached_value("Company", company, "default_currency")
+    main_account_currency = frappe.get_cached_value("Account", main_account, "account_currency")
+    
+    involved_currencies = {company_currency, main_account_currency}
+    for acc in accounts:
+        acc_currency = frappe.get_cached_value("Account", acc.get("account"), "account_currency")
+        involved_currencies.add(acc_currency)
+    
     # Create new Journal Entry document
     je = frappe.new_doc("Journal Entry")
     je.voucher_type = account_type
     je.company = company
     je.posting_date = getdate(posting_date)
     je.cheque_no = reference
-    je.cheque_date= getdate(reference_date)
+    je.cheque_date = getdate(reference_date)
     je.remarks = remarks
     je.custom_cashbook_entry_ref = custom_cashbook_entry_ref
 
-    print(f"---------------------------main account-----------{main_account}")
+    # If multiple currencies are involved, or a non-base currency is used, enable multi_currency
+    if len(involved_currencies) > 1:
+        je.multi_currency = 1
     # Add accounts to the Journal Entry
     for acc in accounts:
+        # Child account row
+        acc_name = acc.get("account")
+        acc_currency = frappe.get_cached_value("Account", acc_name, "account_currency")
+        
         je.append("accounts", {
-            "account": acc.get("account"),
+            "account": acc_name,
             "debit_in_account_currency": acc.get("debit") or 0,
             "credit_in_account_currency": acc.get("credit") or 0,
             "party_type": acc.get("party_type"),
-            "party": acc.get("reference"),
             "party": acc.get("party"),
             "reference_": acc.get("reference"),
-            "user_remark" :acc.get("user_remark"),
-     
+            "user_remark": acc.get("user_remark"),
+            "account_currency": acc_currency,
+            "cost_center": cost_center,
+            "project": project
         })
 
-
-        if acc.get("debit") == 0:
-
+        # Offsetting row (Main account)
+        main_acc_currency = frappe.get_cached_value("Account", main_account, "account_currency")
+        if acc.get("debit") != 0:
             je.append("accounts", {
-            "account":main_account,
-            "debit_in_account_currency": acc.get("credit"),
+                "account": main_account,
+                "credit_in_account_currency": acc.get("debit"),
+                "account_currency": main_acc_currency,
+                "cost_center": cost_center,
+                "project": project
             })
-           
         else:
             je.append("accounts", {
-            "account":main_account,
-            "credit_in_account_currency": acc.get("debit"),
+                "account": main_account,
+                "debit_in_account_currency": acc.get("credit"),
+                "account_currency": main_acc_currency,
+                "cost_center": cost_center,
+                "project": project
             })
     # Save and submit the Journal Entry
     je.save()
