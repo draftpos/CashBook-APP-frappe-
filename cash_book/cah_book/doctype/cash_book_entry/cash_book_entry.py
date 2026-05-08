@@ -1,7 +1,7 @@
 import frappe
 import json
 from frappe.model.document import Document
-from frappe.utils import getdate
+from frappe.utils import getdate, flt
 
 class CashBookEntry(Document):
     def before_save(self):
@@ -139,6 +139,8 @@ class CashBookEntry(Document):
 
 @frappe.whitelist()
 def create_custom_journal_entry(company, account_type, main_account, posting_date, accounts, custom_cashbook_entry_ref, reference=None, reference_date=None, remarks=None, cost_center=None, project=None):
+    from erpnext.setup.utils import get_exchange_rate
+    
     # Detect if multi-currency is needed
     company_currency = frappe.get_cached_value("Company", company, "default_currency")
     main_account_currency = frappe.get_cached_value("Account", main_account, "account_currency")
@@ -157,20 +159,38 @@ def create_custom_journal_entry(company, account_type, main_account, posting_dat
     je.cheque_date = getdate(reference_date)
     je.remarks = remarks
     je.custom_cashbook_entry_ref = custom_cashbook_entry_ref
-
+    
     # If multiple currencies are involved, or a non-base currency is used, enable multi_currency
-    if len(involved_currencies) > 1:
+    multi_currency = len(involved_currencies) > 1
+    if multi_currency:
         je.multi_currency = 1
+        
     # Add accounts to the Journal Entry
     for acc in accounts:
         # Child account row
         acc_name = acc.get("account")
         acc_currency = frappe.get_cached_value("Account", acc_name, "account_currency")
         
+        # Determine amounts in account currency (ensure they are floats)
+        account_debit = flt(acc.get("debit"))
+        account_credit = flt(acc.get("credit"))
+        
+        # Get exchange rate for child account
+        exchange_rate = 1.0
+        if acc_currency != company_currency:
+            exchange_rate = get_exchange_rate(acc_currency, company_currency, posting_date) or 1.0
+            
+        # Calculate base currency amounts
+        base_debit = flt(account_debit * exchange_rate)
+        base_credit = flt(account_credit * exchange_rate)
+        
         je.append("accounts", {
             "account": acc_name,
-            "debit_in_account_currency": acc.get("debit") or 0,
-            "credit_in_account_currency": acc.get("credit") or 0,
+            "debit_in_account_currency": account_debit,
+            "credit_in_account_currency": account_credit,
+            "debit": base_debit,
+            "credit": base_credit,
+            "exchange_rate": exchange_rate,
             "party_type": acc.get("party_type"),
             "party": acc.get("party"),
             "reference_": acc.get("reference"),
@@ -182,22 +202,41 @@ def create_custom_journal_entry(company, account_type, main_account, posting_dat
 
         # Offsetting row (Main account)
         main_acc_currency = frappe.get_cached_value("Account", main_account, "account_currency")
-        if acc.get("debit") != 0:
+        main_exchange_rate = 1.0
+        if main_acc_currency != company_currency:
+            main_exchange_rate = get_exchange_rate(main_acc_currency, company_currency, posting_date) or 1.0
+            
+        if account_debit != 0:
+            # Child was Debit, Main Account is Credit
+            # Use base amount to ensure balancing in base currency
+            base_credit_offset = base_debit
+            # Calculate account currency amount for main account
+            acc_credit_offset = flt(base_credit_offset / main_exchange_rate)
+            
             je.append("accounts", {
                 "account": main_account,
-                "credit_in_account_currency": acc.get("debit"),
+                "credit_in_account_currency": acc_credit_offset,
+                "credit": base_credit_offset,
+                "exchange_rate": main_exchange_rate,
                 "account_currency": main_acc_currency,
                 "cost_center": cost_center,
                 "project": project
             })
         else:
+            # Child was Credit, Main Account is Debit
+            base_debit_offset = base_credit
+            acc_debit_offset = flt(base_debit_offset / main_exchange_rate)
+            
             je.append("accounts", {
                 "account": main_account,
-                "debit_in_account_currency": acc.get("credit"),
+                "debit_in_account_currency": acc_debit_offset,
+                "debit": base_debit_offset,
+                "exchange_rate": main_exchange_rate,
                 "account_currency": main_acc_currency,
                 "cost_center": cost_center,
                 "project": project
             })
+            
     # Save and submit the Journal Entry
     je.save()
     je.submit()

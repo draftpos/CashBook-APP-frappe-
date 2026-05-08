@@ -29,8 +29,6 @@ def execute():
                     WHERE name = %s
                 """, (new_date, d.name))
         except Exception:
-            # If parsing fails, we skip this record to avoid blocking the migration
-            # The migration might still fail for this record, but we try our best.
             pass
 
     frappe.db.commit()

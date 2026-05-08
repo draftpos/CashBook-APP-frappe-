@@ -1,5 +1,6 @@
 [pre_model_sync]
-cash_book.patches.fix_reference_date_format
+cash_book.patches.fix_reference_date_format_v2
+cash_book.patches.sanitize_debit_credit
 # Patches added in this section will be executed before doctypes are migrated
 # Read docs to understand patches: https://frappeframework.com/docs/v14/user/en/database-migrations
 
