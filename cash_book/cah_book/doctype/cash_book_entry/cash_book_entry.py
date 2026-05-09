@@ -143,11 +143,11 @@ def create_custom_journal_entry(company, account_type, main_account, posting_dat
     
     # Detect if multi-currency is needed
     company_currency = frappe.get_cached_value("Company", company, "default_currency")
-    main_account_currency = frappe.get_cached_value("Account", main_account, "account_currency")
+    main_acc_currency = frappe.get_cached_value("Account", main_account, "account_currency") or company_currency
     
-    involved_currencies = {company_currency, main_account_currency}
+    involved_currencies = {company_currency, main_acc_currency}
     for acc in accounts:
-        acc_currency = frappe.get_cached_value("Account", acc.get("account"), "account_currency")
+        acc_currency = frappe.get_cached_value("Account", acc.get("account"), "account_currency") or company_currency
         involved_currencies.add(acc_currency)
     
     # Create new Journal Entry document
@@ -160,37 +160,45 @@ def create_custom_journal_entry(company, account_type, main_account, posting_dat
     je.remarks = remarks
     je.custom_cashbook_entry_ref = custom_cashbook_entry_ref
     
-    # If multiple currencies are involved, or a non-base currency is used, enable multi_currency
-    multi_currency = len(involved_currencies) > 1
-    if multi_currency:
+    # If multiple currencies are involved, enable multi_currency
+    if len(involved_currencies) > 1:
         je.multi_currency = 1
+
+    # Get exchange rate for the main account (Cash Book account)
+    main_exchange_rate = 1.0
+    if main_acc_currency != company_currency:
+        main_exchange_rate = get_exchange_rate(main_acc_currency, company_currency, posting_date) or 1.0
         
     # Add accounts to the Journal Entry
     for acc in accounts:
-        # Child account row
         acc_name = acc.get("account")
-        acc_currency = frappe.get_cached_value("Account", acc_name, "account_currency")
+        acc_currency = frappe.get_cached_value("Account", acc_name, "account_currency") or company_currency
         
-        # Determine amounts in account currency (ensure they are floats)
-        account_debit = flt(acc.get("debit"))
-        account_credit = flt(acc.get("credit"))
+        # Amounts entered in the Cash Book are in the Main Account's currency
+        input_debit = flt(acc.get("debit"))
+        input_credit = flt(acc.get("credit"))
+        
+        # Calculate base currency amounts
+        base_debit = flt(input_debit * main_exchange_rate)
+        base_credit = flt(input_credit * main_exchange_rate)
         
         # Get exchange rate for child account
-        exchange_rate = 1.0
+        child_exchange_rate = 1.0
         if acc_currency != company_currency:
-            exchange_rate = get_exchange_rate(acc_currency, company_currency, posting_date) or 1.0
+            child_exchange_rate = get_exchange_rate(acc_currency, company_currency, posting_date) or 1.0
             
-        # Calculate base currency amounts
-        base_debit = flt(account_debit * exchange_rate)
-        base_credit = flt(account_credit * exchange_rate)
+        # Determine child account amounts in its own currency
+        debit_in_account_currency = flt(base_debit / child_exchange_rate) if child_exchange_rate else base_debit
+        credit_in_account_currency = flt(base_credit / child_exchange_rate) if child_exchange_rate else base_credit
         
+        # Child account row
         je.append("accounts", {
             "account": acc_name,
-            "debit_in_account_currency": account_debit,
-            "credit_in_account_currency": account_credit,
+            "debit_in_account_currency": debit_in_account_currency,
+            "credit_in_account_currency": credit_in_account_currency,
             "debit": base_debit,
             "credit": base_credit,
-            "exchange_rate": exchange_rate,
+            "exchange_rate": child_exchange_rate,
             "party_type": acc.get("party_type"),
             "party": acc.get("party"),
             "reference_": acc.get("reference"),
@@ -201,36 +209,21 @@ def create_custom_journal_entry(company, account_type, main_account, posting_dat
         })
 
         # Offsetting row (Main account)
-        main_acc_currency = frappe.get_cached_value("Account", main_account, "account_currency")
-        main_exchange_rate = 1.0
-        if main_acc_currency != company_currency:
-            main_exchange_rate = get_exchange_rate(main_acc_currency, company_currency, posting_date) or 1.0
-            
-        if account_debit != 0:
-            # Child was Debit, Main Account is Credit
-            # Use base amount to ensure balancing in base currency
-            base_credit_offset = base_debit
-            # Calculate account currency amount for main account
-            acc_credit_offset = flt(base_credit_offset / main_exchange_rate)
-            
+        if input_debit > 0:
             je.append("accounts", {
                 "account": main_account,
-                "credit_in_account_currency": acc_credit_offset,
-                "credit": base_credit_offset,
+                "credit_in_account_currency": input_debit,
+                "credit": base_debit,
                 "exchange_rate": main_exchange_rate,
                 "account_currency": main_acc_currency,
                 "cost_center": cost_center,
                 "project": project
             })
-        else:
-            # Child was Credit, Main Account is Debit
-            base_debit_offset = base_credit
-            acc_debit_offset = flt(base_debit_offset / main_exchange_rate)
-            
+        elif input_credit > 0:
             je.append("accounts", {
                 "account": main_account,
-                "debit_in_account_currency": acc_debit_offset,
-                "debit": base_debit_offset,
+                "debit_in_account_currency": input_credit,
+                "debit": base_credit,
                 "exchange_rate": main_exchange_rate,
                 "account_currency": main_acc_currency,
                 "cost_center": cost_center,
