@@ -113,7 +113,8 @@ class CashBookEntry(Document):
                         "party_type": row.party_type,
                         "party": row.party,
                         "reference":row.get("reference"),
-                        "user_remark" :row.get("remarks")
+                        "user_remark": row.get("remarks"),
+                        "type": row.get("type")
         
                     })
                 create_custom_journal_entry(

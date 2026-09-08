@@ -1,0 +1,113 @@
+<div class="financial-statement">
+	<div class="text-center" style="margin-bottom: 25px; text-align: center;">
+		<h3 style="font-weight: 800; text-transform: uppercase; margin-bottom: 2px; font-size: 19px; color: #000;">
+			{{ (data and data[0] and data[0].company_title) or filters.company or "" }}
+		</h3>
+		<h4 style="font-weight: 700; text-transform: uppercase; margin-top: 0; margin-bottom: 2px; font-size: 15px; color: #111;">
+			STATEMENT OF PROFIT OR LOSS AND COMPREHENSIVE INCOME
+		</h4>
+		<h5 style="color: #374151; margin-top: 0; font-size: 14px; font-weight: 600;">
+			for the year ended {{ frappe.format(filters.to_date, { fieldtype: 'Date' }) }}
+		</h5>
+	</div>
+
+	<table class="table table-bordered" style="width: 100%; border-collapse: collapse; font-size: 13px;">
+		<thead>
+			<tr style="background-color: #f3f4f6; text-align: center;">
+				<th rowspan="2" style="width: 38%; font-weight: 700; padding: 8px; vertical-align: middle; text-align: left;">Line Item</th>
+				<th rowspan="2" style="width: 7%; font-weight: 700; padding: 8px; vertical-align: middle; text-align: center;">Note</th>
+				{% if filters.show_inflation_adjusted %}
+				<th colspan="{{ 2 if filters.compare_with_previous_year else 1 }}" style="background: #e5e7eb; font-weight: 800; padding: 6px; text-align: center; border-bottom: 1px solid #9ca3af;">
+					Inflation adjusted
+				</th>
+				{% endif %}
+				<th colspan="{{ 2 if filters.compare_with_previous_year else 1 }}" style="background: #d1d5db; font-weight: 800; padding: 6px; text-align: center; border-bottom: 1px solid #9ca3af;">
+					Historical cost
+				</th>
+			</tr>
+			<tr style="background-color: #f9fafb; text-align: right;">
+				{% if filters.show_inflation_adjusted %}
+				<th style="padding: 6px 8px; text-align: right; background: #f3f4f6;">{{ columns[2].label }}</th>
+				{% if filters.compare_with_previous_year %}
+				<th style="padding: 6px 8px; text-align: right; background: #f3f4f6;">{{ columns[3].label }}</th>
+				{% endif %}
+				{% endif %}
+				<th style="padding: 6px 8px; text-align: right; background: #e5e7eb;">
+					{{ columns[4 if filters.show_inflation_adjusted and filters.compare_with_previous_year else (3 if filters.show_inflation_adjusted else 2)].label }}
+				</th>
+				{% if filters.compare_with_previous_year %}
+				<th style="padding: 6px 8px; text-align: right; background: #e5e7eb;">
+					{{ columns[5 if filters.show_inflation_adjusted else 3].label }}
+				</th>
+				{% endif %}
+			</tr>
+		</thead>
+		<tbody>
+			{% for row in data %}
+				{% if not row.item_name %}
+					<tr><td colspan="{{ columns|length }}" style="height: 10px; border: none; background: transparent;"></td></tr>
+				{% else %}
+					<tr style="{% if row.is_heading %}background-color: #f9fafb;{% endif %}">
+						<td style="padding: 6px 10px; {% if row.is_bold %}font-weight: 700;{% endif %} {% if row.is_heading %}font-weight: 800; font-size: 1.05em;{% endif %}">
+							{{ row.item_name }}
+						</td>
+						<td style="padding: 6px; text-align: center; font-weight: 600; color: #4b5563;">
+							{{ row.note or "" }}
+						</td>
+						{% if filters.show_inflation_adjusted %}
+						<td class="text-right" style="padding: 6px 10px; text-align: right; {% if row.is_bold %}font-weight: 700;{% endif %} {% if row.is_final %}border-bottom: 3px double #000; font-weight: 800;{% endif %}">
+							{% if row.is_less and row.inflation_curr > 0 %}
+								<span style="color: #dc2626; font-weight: 600;">({{ format_currency(row.inflation_curr, row.currency) }})</span>
+							{% elif row.inflation_curr < 0 %}
+								<span style="color: #dc2626; font-weight: 600;">({{ format_currency(-row.inflation_curr, row.currency) }})</span>
+							{% elif row.inflation_curr != 0 or row.is_bold %}
+								{{ format_currency(row.inflation_curr, row.currency) }}
+							{% else %}
+								-
+							{% endif %}
+						</td>
+						{% if filters.compare_with_previous_year %}
+						<td class="text-right" style="padding: 6px 10px; text-align: right; {% if row.is_bold %}font-weight: 700;{% endif %} {% if row.is_final %}border-bottom: 3px double #000; font-weight: 800;{% endif %}">
+							{% if row.is_less and row.inflation_prev > 0 %}
+								<span style="color: #dc2626; font-weight: 600;">({{ format_currency(row.inflation_prev, row.currency) }})</span>
+							{% elif row.inflation_prev < 0 %}
+								<span style="color: #dc2626; font-weight: 600;">({{ format_currency(-row.inflation_prev, row.currency) }})</span>
+							{% elif row.inflation_prev != 0 or row.is_bold %}
+								{{ format_currency(row.inflation_prev, row.currency) }}
+							{% else %}
+								-
+							{% endif %}
+						</td>
+						{% endif %}
+						{% endif %}
+
+						<td class="text-right" style="padding: 6px 10px; text-align: right; {% if row.is_bold %}font-weight: 700;{% endif %} {% if row.is_final %}border-bottom: 3px double #000; font-weight: 800;{% endif %}">
+							{% if row.is_less and row.historical_curr > 0 %}
+								<span style="color: #dc2626; font-weight: 600;">({{ format_currency(row.historical_curr, row.currency) }})</span>
+							{% elif row.historical_curr < 0 %}
+								<span style="color: #dc2626; font-weight: 600;">({{ format_currency(-row.historical_curr, row.currency) }})</span>
+							{% elif row.historical_curr != 0 or row.is_bold %}
+								{{ format_currency(row.historical_curr, row.currency) }}
+							{% else %}
+								-
+							{% endif %}
+						</td>
+						{% if filters.compare_with_previous_year %}
+						<td class="text-right" style="padding: 6px 10px; text-align: right; {% if row.is_bold %}font-weight: 700;{% endif %} {% if row.is_final %}border-bottom: 3px double #000; font-weight: 800;{% endif %}">
+							{% if row.is_less and row.historical_prev > 0 %}
+								<span style="color: #dc2626; font-weight: 600;">({{ format_currency(row.historical_prev, row.currency) }})</span>
+							{% elif row.historical_prev < 0 %}
+								<span style="color: #dc2626; font-weight: 600;">({{ format_currency(-row.historical_prev, row.currency) }})</span>
+							{% elif row.historical_prev != 0 or row.is_bold %}
+								{{ format_currency(row.historical_prev, row.currency) }}
+							{% else %}
+								-
+							{% endif %}
+						</td>
+						{% endif %}
+					</tr>
+				{% endif %}
+			{% endfor %}
+		</tbody>
+	</table>
+</div>
