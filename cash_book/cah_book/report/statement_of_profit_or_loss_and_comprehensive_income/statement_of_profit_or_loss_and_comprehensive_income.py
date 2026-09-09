@@ -144,20 +144,30 @@ def build_profit_loss_data(company, from_date, to_date, prev_from_date, prev_to_
 	cb_totals_curr = get_cash_book_classified_totals(company, from_date, to_date)
 	cb_totals_prev = get_cash_book_classified_totals(company, prev_from_date, prev_to_date) if compare_prev else {}
 
+	# Helper to sum balances by custom_cost_type
+	def get_classified_total(cost_type, gl_map):
+		tot = 0.0
+		for acc, row in gl_map.items():
+			if row.get("custom_cost_type") == cost_type:
+				tot += flt(row.get("balance"))
+		return tot
+
 	# 1. Note 12: Revenue (Direct Income)
 	rev_curr = cb_totals_curr.get("Direct Income", 0.0)
 	rev_prev = cb_totals_prev.get("Direct Income", 0.0)
 	for acc, row in gl_map_curr.items():
 		r_type = (row.get("root_type") or "").lower()
+		c_type = row.get("custom_cost_type") or ""
 		acc_name = (row.get("account_name") or "").lower()
-		if r_type == "income" and any(k in acc_name for k in ["sales", "direct income", "revenue"]):
+		if c_type == "Direct Income" or (not c_type and r_type == "income" and any(k in acc_name for k in ["sales", "direct income", "revenue"])):
 			bal = flt(row.total_credit) - flt(row.total_debit)
 			if rev_curr == 0.0:
 				rev_curr += bal
 	for acc, row in gl_map_prev.items():
 		r_type = (row.get("root_type") or "").lower()
+		c_type = row.get("custom_cost_type") or ""
 		acc_name = (row.get("account_name") or "").lower()
-		if r_type == "income" and any(k in acc_name for k in ["sales", "direct income", "revenue"]):
+		if c_type == "Direct Income" or (not c_type and r_type == "income" and any(k in acc_name for k in ["sales", "direct income", "revenue"])):
 			bal = flt(row.total_credit) - flt(row.total_debit)
 			if rev_prev == 0.0:
 				rev_prev += bal
@@ -181,15 +191,17 @@ def build_profit_loss_data(company, from_date, to_date, prev_from_date, prev_to_
 	other_inc_prev = cb_totals_prev.get("Indirect Income", 0.0)
 	for acc, row in gl_map_curr.items():
 		r_type = (row.get("root_type") or "").lower()
+		c_type = row.get("custom_cost_type") or ""
 		acc_name = (row.get("account_name") or "").lower()
-		if r_type == "income" and not any(k in acc_name for k in ["sales", "direct income", "revenue"]):
+		if c_type == "Indirect Income" or (not c_type and r_type == "income" and not any(k in acc_name for k in ["sales", "direct income", "revenue"])):
 			bal = flt(row.total_credit) - flt(row.total_debit)
 			if other_inc_curr == 0.0:
 				other_inc_curr += bal
 	for acc, row in gl_map_prev.items():
 		r_type = (row.get("root_type") or "").lower()
+		c_type = row.get("custom_cost_type") or ""
 		acc_name = (row.get("account_name") or "").lower()
-		if r_type == "income" and not any(k in acc_name for k in ["sales", "direct income", "revenue"]):
+		if c_type == "Indirect Income" or (not c_type and r_type == "income" and not any(k in acc_name for k in ["sales", "direct income", "revenue"])):
 			bal = flt(row.total_credit) - flt(row.total_debit)
 			if other_inc_prev == 0.0:
 				other_inc_prev += bal
@@ -202,25 +214,37 @@ def build_profit_loss_data(company, from_date, to_date, prev_from_date, prev_to_
 	dist_curr = cb_totals_curr.get("Distribution costs", 0.0)
 	dist_prev = cb_totals_prev.get("Distribution costs", 0.0)
 	if dist_curr == 0.0:
-		dist_curr = query_account_balance(company, ["distribution", "freight", "forwarding", "delivery", "selling", "marketing", "carriage outward"], gl_map_curr)
+		dist_curr = get_classified_total("Distribution costs", gl_map_curr)
+		if dist_curr == 0.0:
+			dist_curr = query_account_balance(company, ["distribution", "freight", "forwarding", "delivery", "selling", "marketing", "carriage outward"], gl_map_curr)
 	if dist_prev == 0.0 and compare_prev:
-		dist_prev = query_account_balance(company, ["distribution", "freight", "forwarding", "delivery", "selling", "marketing", "carriage outward"], gl_map_prev)
+		dist_prev = get_classified_total("Distribution costs", gl_map_prev)
+		if dist_prev == 0.0:
+			dist_prev = query_account_balance(company, ["distribution", "freight", "forwarding", "delivery", "selling", "marketing", "carriage outward"], gl_map_prev)
 
 	# 5. Note 15: Administrative expenses
 	admin_curr = cb_totals_curr.get("Administrative expenses", 0.0)
 	admin_prev = cb_totals_prev.get("Administrative expenses", 0.0)
 	if admin_curr == 0.0:
-		admin_curr = query_account_balance(company, ["administrative", "admin", "office", "stationery", "legal", "audit"], gl_map_curr)
+		admin_curr = get_classified_total("Administrative expenses", gl_map_curr)
+		if admin_curr == 0.0:
+			admin_curr = query_account_balance(company, ["administrative", "admin", "office", "stationery", "legal", "audit"], gl_map_curr)
 	if admin_prev == 0.0 and compare_prev:
-		admin_prev = query_account_balance(company, ["administrative", "admin", "office", "stationery", "legal", "audit"], gl_map_prev)
+		admin_prev = get_classified_total("Administrative expenses", gl_map_prev)
+		if admin_prev == 0.0:
+			admin_prev = query_account_balance(company, ["administrative", "admin", "office", "stationery", "legal", "audit"], gl_map_prev)
 
 	# 6. Note 17: Other expenses
 	other_exp_curr = cb_totals_curr.get("Other expenses", 0.0)
 	other_exp_prev = cb_totals_prev.get("Other expenses", 0.0)
 	if other_exp_curr == 0.0:
-		other_exp_curr = query_account_balance(company, ["other expense", "miscellaneous", "entertainment"], gl_map_curr)
+		other_exp_curr = get_classified_total("Other expenses", gl_map_curr)
+		if other_exp_curr == 0.0:
+			other_exp_curr = query_account_balance(company, ["other expense", "miscellaneous", "entertainment"], gl_map_curr)
 	if other_exp_prev == 0.0 and compare_prev:
-		other_exp_prev = query_account_balance(company, ["other expense", "miscellaneous", "entertainment"], gl_map_prev)
+		other_exp_prev = get_classified_total("Other expenses", gl_map_prev)
+		if other_exp_prev == 0.0:
+			other_exp_prev = query_account_balance(company, ["other expense", "miscellaneous", "entertainment"], gl_map_prev)
 
 	# Total expenses
 	total_exp_curr = dist_curr + admin_curr + other_exp_curr

@@ -246,7 +246,7 @@ fixtures = [
     {
         "dt": "Custom Field",
         "filters": [
-            ["dt", "in", ["Cash Book Entry", "Cash Book Account", "Journal Entry"]]
+            ["dt", "in", ["Cash Book Entry", "Cash Book Account", "Journal Entry", "Account"]]
         ]
     },
     {

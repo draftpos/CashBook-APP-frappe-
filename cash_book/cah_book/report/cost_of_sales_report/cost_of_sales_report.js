@@ -33,6 +33,18 @@ frappe.query_reports["Cost of Sales Report"] = {
 		}
 	],
 	formatter: function (value, row, column, data, default_formatter) {
+		// Empty row
+		if (!data || !data.item_name || !data.item_name.trim()) {
+			return "";
+		}
+
+		// If amount column is null/undefined, do not display 0.00
+		if (column.fieldname.indexOf("amount") !== -1) {
+			if (data[column.fieldname] === null || data[column.fieldname] === undefined || data[column.fieldname] === "") {
+				return "";
+			}
+		}
+
 		value = default_formatter(value, row, column, data);
 		if (data && data.is_bold) {
 			value = $(`<span>${value}</span>`).css("font-weight", "bold").wrap("<p>").parent().html();

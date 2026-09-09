@@ -56,7 +56,8 @@
    "in_preview": 1,
    "in_standard_filter": 1,
    "label": "Type",
-   "options": "\nDirect Cost\nIndirect Cost\nDistribution costs\nAdministrative expenses\nOther expenses"
+   "options": "\nDirect Cost\nIndirect Cost\nDirect Income\nIndirect Income\nDistribution costs\nAdministrative expenses\nOther expenses\nPurchases",
+   "fetch_from": "account.custom_cost_type"
   },
   {
    "fieldname": "debit",

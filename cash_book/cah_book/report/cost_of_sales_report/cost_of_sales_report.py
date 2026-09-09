@@ -67,7 +67,7 @@ def execute(filters=None):
 	# Build report summary cards
 	report_summary = []
 	for row in data:
-		if row.get("summary_key"):
+		if row.get("summary_key") and row.get("current_amount") is not None:
 			report_summary.append({
 				"value": row.get("current_amount"),
 				"label": row.get("summary_key"),
@@ -96,6 +96,170 @@ def execute(filters=None):
 	return columns, data, header_message, None, report_summary
 
 
+def get_raw_materials_stock(company, date_ref, is_opening=False):
+	"""
+	Calculates the valuation balance of Raw Materials at date_ref.
+	First queries the Stock Ledger for items in 'Raw Material' Item Group.
+	Falls back to GL Entry accounts matching raw material or stock in hand.
+	"""
+	if not company or not date_ref:
+		return 0.0
+
+	operator = "<" if is_opening else "<="
+
+	# 1. Stock Ledger for items belonging to Raw Material item group
+	sle_res = frappe.db.sql(f"""
+		SELECT SUM(sle.stock_value_difference) as val
+		FROM `tabStock Ledger Entry` sle
+		INNER JOIN `tabItem` item ON sle.item_code = item.name
+		WHERE sle.company = %s
+		  AND sle.posting_date {operator} %s
+		  AND (item.item_group = 'Raw Material' OR LOWER(item.item_group) LIKE '%%raw%%')
+		  AND sle.is_cancelled = 0
+	""", (company, date_ref), as_dict=1)
+
+	if sle_res and sle_res[0].get("val") is not None and abs(flt(sle_res[0].val)) > 0:
+		return abs(flt(sle_res[0].val))
+
+	# 2. Fallback: GL Entry cumulative balance on accounts matching raw material or stock in hand
+	gl_res = frappe.db.sql(f"""
+		SELECT SUM(gl.debit - gl.credit) as balance
+		FROM `tabGL Entry` gl
+		INNER JOIN `tabAccount` acc ON gl.account = acc.name
+		WHERE gl.company = %s
+		  AND gl.posting_date {operator} %s
+		  AND gl.is_cancelled = 0
+		  AND (LOWER(acc.name) LIKE '%%raw material%%' OR LOWER(acc.name) LIKE '%%stock in hand%%')
+	""", (company, date_ref), as_dict=1)
+
+	if gl_res and gl_res[0].get("balance") is not None:
+		return abs(flt(gl_res[0].balance))
+
+	return 0.0
+
+
+def get_purchases_total(company, from_date, to_date):
+	"""
+	Calculates purchases for the period:
+	1. From submitted Purchase Invoices (focusing on Raw Material items, then all items).
+	2. From Cash Book entries (Type = 'Purchases' or account name matching purchase).
+	3. Fallback to GL entries on purchase accounts.
+	"""
+	if not company:
+		return 0.0
+
+	total_purchases = 0.0
+
+	# 1. Purchase Invoices specifically for Raw Material items
+	pi_raw = frappe.db.sql("""
+		SELECT SUM(pii.base_net_amount) as total
+		FROM `tabPurchase Invoice Item` pii
+		INNER JOIN `tabPurchase Invoice` pi ON pii.parent = pi.name
+		WHERE pi.company = %s
+		  AND pi.posting_date BETWEEN %s AND %s
+		  AND pi.docstatus = 1
+		  AND (pii.item_group = 'Raw Material' OR LOWER(pii.item_group) LIKE '%%raw%%')
+	""", (company, from_date, to_date), as_dict=1)
+
+	if pi_raw and pi_raw[0].get("total") is not None and flt(pi_raw[0].total) > 0:
+		total_purchases += flt(pi_raw[0].total)
+	else:
+		# If no specific Raw Material lines, sum all submitted Purchase Invoices in the period
+		pi_all = frappe.db.sql("""
+			SELECT SUM(pii.base_net_amount) as total
+			FROM `tabPurchase Invoice Item` pii
+			INNER JOIN `tabPurchase Invoice` pi ON pii.parent = pi.name
+			WHERE pi.company = %s
+			  AND pi.posting_date BETWEEN %s AND %s
+			  AND pi.docstatus = 1
+		""", (company, from_date, to_date), as_dict=1)
+		if pi_all and pi_all[0].get("total") is not None and flt(pi_all[0].total) > 0:
+			total_purchases += flt(pi_all[0].total)
+
+	# 2. Add Cash Purchases from Cash Book entries
+	cb_purchases = frappe.db.sql("""
+		SELECT SUM(CASE WHEN cba.debit > 0 THEN cba.debit ELSE cba.credit END) as total
+		FROM `tabCash Book Account` cba
+		INNER JOIN `tabCash Book Entry` cbe ON cba.parent = cbe.name
+		WHERE cbe.company = %s
+		  AND cba.post_date BETWEEN %s AND %s
+		  AND cbe.docstatus = 1
+		  AND (cba.type = 'Purchases' OR LOWER(cba.account) LIKE '%%purchase%%')
+	""", (company, from_date, to_date), as_dict=1)
+
+	if cb_purchases and cb_purchases[0].get("total") is not None and flt(cb_purchases[0].total) > 0:
+		total_purchases += flt(cb_purchases[0].total)
+
+	# 3. Fallback to GL Entry purchases if still zero
+	if total_purchases == 0.0:
+		gl_purchases = frappe.db.sql("""
+			SELECT SUM(gl.debit - gl.credit) as balance
+			FROM `tabGL Entry` gl
+			INNER JOIN `tabAccount` acc ON gl.account = acc.name
+			WHERE gl.company = %s
+			  AND gl.posting_date BETWEEN %s AND %s
+			  AND gl.is_cancelled = 0
+			  AND (LOWER(acc.name) LIKE '%%purchase%%' OR LOWER(acc.name) LIKE '%%stock received but not billed%%')
+		""", (company, from_date, to_date), as_dict=1)
+		if gl_purchases and gl_purchases[0].get("balance") is not None:
+			total_purchases += abs(flt(gl_purchases[0].balance))
+
+	return total_purchases
+
+
+def get_cash_book_cost_rows(company, cost_type, from_date, to_date, prev_from_date=None, prev_to_date=None, compare_prev=0):
+	"""
+	Fetches accounts linked in Cash Book Entries categorized by cost_type (e.g. 'Direct Cost', 'Indirect Cost').
+	Returns a list of tuples: (account_display_name, current_amount, previous_amount)
+	and totals.
+	"""
+	query = """
+		SELECT
+			cba.account,
+			COALESCE(acc.account_name, cba.account) as account_name,
+			SUM(CASE WHEN cba.debit > 0 THEN cba.debit ELSE cba.credit END) as amount
+		FROM
+			`tabCash Book Account` cba
+		INNER JOIN
+			`tabCash Book Entry` cbe ON cba.parent = cbe.name
+		LEFT JOIN
+			`tabAccount` acc ON cba.account = acc.name
+		WHERE
+			cbe.company = %s
+			AND cba.post_date BETWEEN %s AND %s
+			AND cbe.docstatus = 1
+			AND cba.type = %s
+		GROUP BY
+			cba.account
+		ORDER BY
+			account_name ASC
+	"""
+	curr_entries = frappe.db.sql(query, (company, from_date, to_date, cost_type), as_dict=1)
+	curr_map = {r.account: {"name": r.account_name, "amount": flt(r.amount)} for r in curr_entries}
+
+	prev_map = {}
+	if compare_prev and prev_from_date and prev_to_date:
+		prev_entries = frappe.db.sql(query, (company, prev_from_date, prev_to_date, cost_type), as_dict=1)
+		prev_map = {r.account: {"name": r.account_name, "amount": flt(r.amount)} for r in prev_entries}
+
+	all_accounts = set(curr_map.keys()) | set(prev_map.keys())
+	rows = []
+	tot_curr = 0.0
+	tot_prev = 0.0
+
+	for acc in sorted(all_accounts, key=lambda a: (curr_map.get(a) or prev_map.get(a))["name"]):
+		display_name = (curr_map.get(acc) or prev_map.get(acc))["name"]
+		c_val = curr_map.get(acc, {}).get("amount", 0.0)
+		p_val = prev_map.get(acc, {}).get("amount", 0.0)
+
+		if c_val != 0.0 or p_val != 0.0:
+			tot_curr += c_val
+			tot_prev += p_val
+			rows.append((display_name, c_val, p_val))
+
+	return rows, tot_curr, tot_prev
+
+
 def build_cost_of_sales_data(company, from_date, to_date, prev_from_date, prev_to_date, compare_prev, currency, company_title=""):
 	gl_map_curr = get_gl_entries_by_account(company, from_date, to_date)
 	gl_map_prev = get_gl_entries_by_account(company, prev_from_date, prev_to_date) if compare_prev else {}
@@ -104,11 +268,11 @@ def build_cost_of_sales_data(company, from_date, to_date, prev_from_date, prev_t
 		return query_account_balance(company, keywords, gl_map, is_opening, is_closing, date_ref)
 
 	# 1. Raw Materials & Purchases
-	open_inv_curr = get_val(["raw material", "stock in hand", "inventory"], gl_map_curr, is_opening=True, date_ref=from_date)
-	open_inv_prev = get_val(["raw material", "stock in hand", "inventory"], gl_map_prev, is_opening=True, date_ref=prev_from_date) if compare_prev else 0.0
+	open_inv_curr = get_raw_materials_stock(company, from_date, is_opening=True)
+	open_inv_prev = get_raw_materials_stock(company, prev_from_date, is_opening=True) if compare_prev else 0.0
 
-	purchases_curr = get_val(["purchase", "stock received but not billed", "raw materials purchase"], gl_map_curr)
-	purchases_prev = get_val(["purchase", "stock received but not billed", "raw materials purchase"], gl_map_prev) if compare_prev else 0.0
+	purchases_curr = get_purchases_total(company, from_date, to_date)
+	purchases_prev = get_purchases_total(company, prev_from_date, prev_to_date) if compare_prev else 0.0
 
 	carriage_curr = get_val(["carriage inward", "freight", "inward transport"], gl_map_curr)
 	carriage_prev = get_val(["carriage inward", "freight", "inward transport"], gl_map_prev) if compare_prev else 0.0
@@ -116,64 +280,31 @@ def build_cost_of_sales_data(company, from_date, to_date, prev_from_date, prev_t
 	subtotal_mat_curr = open_inv_curr + purchases_curr + carriage_curr
 	subtotal_mat_prev = open_inv_prev + purchases_prev + carriage_prev
 
-	close_inv_curr = get_val(["raw material", "stock in hand", "inventory"], gl_map_curr, is_closing=True, date_ref=to_date)
-	close_inv_prev = get_val(["raw material", "stock in hand", "inventory"], gl_map_prev, is_closing=True, date_ref=prev_to_date) if compare_prev else 0.0
+	close_inv_curr = get_raw_materials_stock(company, to_date, is_opening=False)
+	close_inv_prev = get_raw_materials_stock(company, prev_to_date, is_opening=False) if compare_prev else 0.0
 
 	cost_raw_consumed_curr = subtotal_mat_curr - close_inv_curr
 	cost_raw_consumed_prev = subtotal_mat_prev - close_inv_prev
 
-	# 2. Direct Costs
-	direct_items = [
-		("Direct labour", ["direct labour", "direct labor", "wages - direct", "factory wages"]),
-		("Electricity", ["electricity - direct", "factory electricity", "electricity"]),
-		("Generator fuel", ["generator fuel - direct", "generator fuel", "diesel - factory"]),
-		("Water", ["water - direct", "factory water", "water charges"]),
-	]
-
-	direct_rows = []
-	tot_direct_curr = 0.0
-	tot_direct_prev = 0.0
-	for label, kw in direct_items:
-		v_curr = get_val(kw, gl_map_curr)
-		v_prev = get_val(kw, gl_map_prev) if compare_prev else 0.0
-		tot_direct_curr += v_curr
-		tot_direct_prev += v_prev
-		direct_rows.append((label, v_curr, v_prev))
+	# 2. Direct Costs (Only accounts linked on Cash Book Entry with Type = 'Direct Cost')
+	direct_rows, tot_direct_curr, tot_direct_prev = get_cash_book_cost_rows(
+		company, "Direct Cost", from_date, to_date, prev_from_date, prev_to_date, compare_prev
+	)
 
 	direct_cost_production_curr = cost_raw_consumed_curr + tot_direct_curr
 	direct_cost_production_prev = cost_raw_consumed_prev + tot_direct_prev
 
-	# 3. Factory Overheads (Indirect costs)
-	overhead_items = [
-		("Indirect labour", ["indirect labour", "indirect labor", "factory supervisor salary"]),
-		("Water", ["water - indirect", "factory water overhead", "water overhead"]),
-		("Electricity", ["electricity - indirect", "overhead electricity"]),
-		("Cleaning materials", ["cleaning material", "cleaning supplies", "sanitation"]),
-		("Closures", ["closures", "bottle closures", "corks", "caps"]),
-		("Canteen expenses", ["canteen expense", "staff canteen", "canteen"]),
-		("Protective clothing", ["protective clothing", "safety gear", "uniforms - factory"]),
-		("Repairs and maintenance", ["repair", "repairs", "repairs and maintenance", "repairs & maintenance", "factory repairs", "plant maintenance"]),
-		("Generator fuel", ["generator fuel - overhead", "generator fuel indirect"]),
-		("Travelling and subsistence", ["travel and subsistence", "travelling and subsistence", "factory travel"]),
-		("Depreciation charge", ["depreciation - factory", "depreciation of plant", "depreciation"]),
-	]
-
-	overhead_rows = []
-	tot_overhead_curr = 0.0
-	tot_overhead_prev = 0.0
-	for label, kw in overhead_items:
-		v_curr = get_val(kw, gl_map_curr)
-		v_prev = get_val(kw, gl_map_prev) if compare_prev else 0.0
-		tot_overhead_curr += v_curr
-		tot_overhead_prev += v_prev
-		overhead_rows.append((label, v_curr, v_prev))
+	# 3. Factory Overheads (Only accounts linked on Cash Book Entry with Type = 'Indirect Cost')
+	overhead_rows, tot_overhead_curr, tot_overhead_prev = get_cash_book_cost_rows(
+		company, "Indirect Cost", from_date, to_date, prev_from_date, prev_to_date, compare_prev
+	)
 
 	total_cost_production_curr = direct_cost_production_curr + tot_overhead_curr
 	total_cost_production_prev = direct_cost_production_prev + tot_overhead_prev
 
-	# 4. Finished Goods Adjustment
-	close_fg_curr = get_val(["finished goods", "stock of finished goods"], gl_map_curr, is_closing=True, date_ref=to_date)
-	close_fg_prev = get_val(["finished goods", "stock of finished goods"], gl_map_prev, is_closing=True, date_ref=prev_to_date) if compare_prev else 0.0
+	# 4. Finished Goods Adjustment (closing stock of finished goods)
+	close_fg_curr = query_finished_goods_stock(company, to_date, gl_map_curr)
+	close_fg_prev = query_finished_goods_stock(company, prev_to_date, gl_map_prev) if compare_prev else 0.0
 
 	cost_of_sales_curr = total_cost_production_curr - close_fg_curr
 	cost_of_sales_prev = total_cost_production_prev - close_fg_prev
@@ -182,10 +313,10 @@ def build_cost_of_sales_data(company, from_date, to_date, prev_from_date, prev_t
 	data = []
 
 	def add_row(item_name, c_amt=None, p_amt=None, is_bold=False, is_heading=False, is_less=False, summary_key=None, indent=0):
-		prefix = "    " * indent
+		prefix = "    " * indent if item_name else ""
 		row = {
-			"item_name": prefix + item_name,
-			"current_amount": c_amt if c_amt is not None else 0.0,
+			"item_name": prefix + item_name if item_name else "",
+			"current_amount": c_amt if c_amt is not None else None,
 			"currency": currency,
 			"company_title": company_title,
 			"is_bold": 1 if is_bold else 0,
@@ -193,13 +324,13 @@ def build_cost_of_sales_data(company, from_date, to_date, prev_from_date, prev_t
 			"is_less": 1 if is_less else 0,
 		}
 		if compare_prev:
-			row["previous_amount"] = p_amt if p_amt is not None else 0.0
+			row["previous_amount"] = p_amt if p_amt is not None else None
 		if summary_key:
 			row["summary_key"] = summary_key
 		data.append(row)
 
-	# Build rows exactly as in reference note
-	add_row("19 Cost of sales", is_bold=True, is_heading=True)
+	# Build rows: Section headings do NOT have amounts, only subtotal and item rows do!
+	add_row("19 Cost of sales", None, None, is_bold=True, is_heading=True)
 	add_row("Opening inventory", open_inv_curr, open_inv_prev, indent=1)
 	add_row("Add: Purchases", purchases_curr, purchases_prev, indent=1)
 	add_row("Carriage inwards", carriage_curr, carriage_prev, indent=2)
@@ -208,7 +339,7 @@ def build_cost_of_sales_data(company, from_date, to_date, prev_from_date, prev_t
 	add_row("Total cost of raw-materials consumed", cost_raw_consumed_curr, cost_raw_consumed_prev, is_bold=True, summary_key=_("Raw Materials Consumed"))
 
 	add_row("", None, None)
-	add_row("Add: Direct costs", tot_direct_curr, tot_direct_prev, is_bold=True)
+	add_row("Add: Direct costs", None, None, is_bold=True, is_heading=True)
 	for label, v_c, v_p in direct_rows:
 		add_row(label, v_c, v_p, indent=1)
 	add_row("Total Direct costs", tot_direct_curr, tot_direct_prev, is_bold=True, indent=1)
@@ -217,7 +348,7 @@ def build_cost_of_sales_data(company, from_date, to_date, prev_from_date, prev_t
 	add_row("Direct cost of production", direct_cost_production_curr, direct_cost_production_prev, is_bold=True, is_heading=True, summary_key=_("Direct Cost of Production"))
 
 	add_row("", None, None)
-	add_row("Add: Factory overheads", tot_overhead_curr, tot_overhead_prev, is_bold=True)
+	add_row("Add: Factory overheads", None, None, is_bold=True, is_heading=True)
 	for label, v_c, v_p in overhead_rows:
 		add_row(label, v_c, v_p, indent=1)
 	add_row("Total Factory overheads", tot_overhead_curr, tot_overhead_prev, is_bold=True, indent=1)
@@ -230,6 +361,36 @@ def build_cost_of_sales_data(company, from_date, to_date, prev_from_date, prev_t
 	add_row("Cost of sales", cost_of_sales_curr, cost_of_sales_prev, is_bold=True, is_heading=True, summary_key=_("Cost of Sales"))
 
 	return data
+
+
+def query_finished_goods_stock(company, date_ref, gl_map):
+	"""
+	Calculates closing stock of finished goods from stock ledger or finished goods accounts.
+	"""
+	if not company or not date_ref:
+		return 0.0
+
+	# 1. Check Stock Ledger for Finished Goods category
+	sle_res = frappe.db.sql("""
+		SELECT SUM(sle.stock_value_difference) as val
+		FROM `tabStock Ledger Entry` sle
+		INNER JOIN `tabItem` item ON sle.item_code = item.name
+		WHERE sle.company = %s
+		  AND sle.posting_date <= %s
+		  AND (item.item_group = 'Finished Goods' OR LOWER(item.item_group) LIKE '%%finished%%' OR item.item_group = 'Products')
+		  AND sle.is_cancelled = 0
+	""", (company, date_ref), as_dict=1)
+
+	if sle_res and sle_res[0].get("val") is not None and abs(flt(sle_res[0].val)) > 0:
+		return abs(flt(sle_res[0].val))
+
+	# 2. Fallback to GL entries
+	for acc_name, row in gl_map.items():
+		acc_lower = acc_name.lower()
+		if any(k in acc_lower for k in ["finished goods", "stock of finished goods"]):
+			return abs(flt(row.get("balance", 0.0)))
+
+	return 0.0
 
 
 def get_gl_entries_by_account(company, from_date, to_date):
@@ -269,7 +430,6 @@ def query_account_balance(company, keywords, gl_map, is_opening=False, is_closin
 
 	total = 0.0
 
-	# Check for Stock/Inventory balance at date if opening/closing stock
 	if is_opening or is_closing:
 		operator = "<" if is_opening else "<="
 		kw_condition = " OR ".join([f"LOWER(acc.name) LIKE {frappe.db.escape('%' + k.lower() + '%')}" for k in keywords])
@@ -292,7 +452,6 @@ def query_account_balance(company, keywords, gl_map, is_opening=False, is_closin
 			return abs(flt(res[0].balance))
 		return 0.0
 
-	# Period activity from preloaded GL map
 	for acc_name, row in gl_map.items():
 		acc_lower = acc_name.lower()
 		for kw in keywords:
