@@ -207,6 +207,30 @@ def get_purchases_total(company, from_date, to_date):
 	return total_purchases
 
 
+def get_direct_materials_manufacture_cost(company, from_date, to_date):
+	"""
+	Calculates direct materials consumed in production from Stock Entry:
+	Total outgoing value where stock_entry_type is Manufacture (or purpose is Manufacture)
+	filtered by posting_date between from_date and to_date, docstatus = 1.
+	"""
+	if not company or not from_date or not to_date:
+		return 0.0
+
+	res = frappe.db.sql("""
+		SELECT SUM(total_outgoing_value) as total_val
+		FROM `tabStock Entry`
+		WHERE company = %s
+		  AND posting_date BETWEEN %s AND %s
+		  AND (stock_entry_type = 'Manufacture' OR purpose = 'Manufacture')
+		  AND docstatus = 1
+	""", (company, from_date, to_date), as_dict=1)
+
+	if res and res[0].get("total_val") is not None:
+		return flt(res[0].total_val)
+
+	return 0.0
+
+
 def get_cash_book_cost_rows(company, cost_type, from_date, to_date, prev_from_date=None, prev_to_date=None, compare_prev=0):
 	"""
 	Fetches accounts linked in Cash Book Entries categorized by cost_type (e.g. 'Direct Cost', 'Indirect Cost').
@@ -286,10 +310,16 @@ def build_cost_of_sales_data(company, from_date, to_date, prev_from_date, prev_t
 	cost_raw_consumed_curr = subtotal_mat_curr - close_inv_curr
 	cost_raw_consumed_prev = subtotal_mat_prev - close_inv_prev
 
-	# 2. Direct Costs (Only accounts linked on Cash Book Entry with Type = 'Direct Cost')
-	direct_rows, tot_direct_curr, tot_direct_prev = get_cash_book_cost_rows(
+	# 2. Direct Costs (Direct Materials from Stock Entry Manufacture + Cash Book Type = 'Direct Cost')
+	direct_mat_curr = get_direct_materials_manufacture_cost(company, from_date, to_date)
+	direct_mat_prev = get_direct_materials_manufacture_cost(company, prev_from_date, prev_to_date) if compare_prev else 0.0
+
+	direct_rows, tot_direct_cb_curr, tot_direct_cb_prev = get_cash_book_cost_rows(
 		company, "Direct Cost", from_date, to_date, prev_from_date, prev_to_date, compare_prev
 	)
+
+	tot_direct_curr = direct_mat_curr + tot_direct_cb_curr
+	tot_direct_prev = direct_mat_prev + tot_direct_cb_prev
 
 	direct_cost_production_curr = cost_raw_consumed_curr + tot_direct_curr
 	direct_cost_production_prev = cost_raw_consumed_prev + tot_direct_prev
@@ -340,6 +370,7 @@ def build_cost_of_sales_data(company, from_date, to_date, prev_from_date, prev_t
 
 	add_row("", None, None)
 	add_row("Add: Direct costs", None, None, is_bold=True, is_heading=True)
+	add_row("Direct Manufacture", direct_mat_curr, direct_mat_prev, indent=1)
 	for label, v_c, v_p in direct_rows:
 		add_row(label, v_c, v_p, indent=1)
 	add_row("Total Direct costs", tot_direct_curr, tot_direct_prev, is_bold=True, indent=1)
@@ -397,12 +428,21 @@ def get_gl_entries_by_account(company, from_date, to_date):
 	if not company:
 		return {}
 
-	entries = frappe.db.sql("""
+	has_custom_cost_type = False
+	try:
+		has_custom_cost_type = frappe.db.has_column("Account", "custom_cost_type")
+	except Exception:
+		pass
+
+	cost_type_col = "acc.custom_cost_type," if has_custom_cost_type else "'' as custom_cost_type,"
+
+	entries = frappe.db.sql(f"""
 		SELECT
 			gl.account,
 			acc.account_name,
 			acc.root_type,
 			acc.account_type,
+			{cost_type_col}
 			SUM(gl.debit - gl.credit) AS balance,
 			SUM(gl.debit) as total_debit,
 			SUM(gl.credit) as total_credit
@@ -424,15 +464,20 @@ def get_gl_entries_by_account(company, from_date, to_date):
 	return result
 
 
-def query_account_balance(company, keywords, gl_map, is_opening=False, is_closing=False, date_ref=None):
+def query_account_balance(company, keywords, gl_map, is_opening=False, is_closing=False, date_ref=None, exclude_accounts=None):
 	if not company:
 		return 0.0
 
 	total = 0.0
+	exclude_set = set(exclude_accounts) if exclude_accounts else set()
 
 	if is_opening or is_closing:
 		operator = "<" if is_opening else "<="
 		kw_condition = " OR ".join([f"LOWER(acc.name) LIKE {frappe.db.escape('%' + k.lower() + '%')}" for k in keywords])
+		exclude_cond = ""
+		if exclude_set:
+			escaped_accs = ", ".join([frappe.db.escape(a) for a in exclude_set])
+			exclude_cond = f"AND acc.name NOT IN ({escaped_accs})"
 
 		res = frappe.db.sql(f"""
 			SELECT
@@ -446,6 +491,7 @@ def query_account_balance(company, keywords, gl_map, is_opening=False, is_closin
 				AND gl.posting_date {operator} %s
 				AND gl.is_cancelled = 0
 				AND ({kw_condition})
+				{exclude_cond}
 		""", (company, date_ref), as_dict=1)
 
 		if res and res[0].balance:
@@ -453,6 +499,11 @@ def query_account_balance(company, keywords, gl_map, is_opening=False, is_closin
 		return 0.0
 
 	for acc_name, row in gl_map.items():
+		if acc_name in exclude_set or row.get("account") in exclude_set:
+			continue
+		c_type = (row.get("custom_cost_type") or "").strip()
+		if c_type in ["Direct Cost", "Indirect Cost", "Purchases"]:
+			continue
 		acc_lower = acc_name.lower()
 		for kw in keywords:
 			if kw.lower() in acc_lower:

@@ -136,18 +136,130 @@ def execute(filters=None):
 	return columns, data, header_message, None, report_summary
 
 
+def get_cost_of_sales_accounts(company):
+	"""
+	Returns all accounts associated with Cost of Sales, Direct Cost, Indirect Cost, and Production:
+	Filters both by Cash Book tags and by account name/type.
+	These accounts and their amounts MUST NEVER appear in Profit & Loss expenses.
+	"""
+	cos_accounts = set()
+	if not company:
+		return cos_accounts
+
+	# 1. Any account linked on Cash Book Entries with type Direct Cost or Indirect Cost (draft or submitted)
+	try:
+		cb_accs = frappe.db.sql("""
+			SELECT DISTINCT cba.account
+			FROM `tabCash Book Account` cba
+			LEFT JOIN `tabCash Book Entry` cbe ON cba.parent = cbe.name
+			WHERE (cbe.company = %s OR cbe.company IS NULL OR %s = '')
+			  AND cba.type IN ('Direct Cost', 'Indirect Cost', 'Purchases')
+		""", (company, company), as_dict=1)
+		for r in cb_accs:
+			if r.account:
+				cos_accounts.add(r.account)
+	except Exception:
+		pass
+
+	# 2. Accounts marked with custom_cost_type in Direct Cost, Indirect Cost, Purchases
+	try:
+		if frappe.db.has_column("Account", "custom_cost_type"):
+			acc_res = frappe.db.sql("""
+				SELECT name FROM `tabAccount`
+				WHERE (company = %s OR %s = '')
+				  AND custom_cost_type IN ('Direct Cost', 'Indirect Cost', 'Purchases')
+			""", (company, company), as_dict=1)
+			for r in acc_res:
+				cos_accounts.add(r.name)
+	except Exception:
+		pass
+
+	# 3. Any account with Direct, Indirect, Production, Factory, Manufacturing, Stock, or COGS in name/type
+	try:
+		name_accs = frappe.db.sql("""
+			SELECT name FROM `tabAccount`
+			WHERE (company = %s OR %s = '')
+			  AND (
+			      account_type IN ('Stock', 'Stock Received But Not Billed', 'Cost of Goods Sold')
+			      OR LOWER(name) LIKE '%%direct labour%%'
+			      OR LOWER(name) LIKE '%%direct labor%%'
+			      OR LOWER(name) LIKE '%%direct expense%%'
+			      OR LOWER(name) LIKE '%%direct material%%'
+			      OR LOWER(name) LIKE '%%- direct%%'
+			      OR LOWER(name) LIKE '%%direct -%%'
+			      OR LOWER(name) LIKE '%%indirect labour%%'
+			      OR LOWER(name) LIKE '%%indirect labor%%'
+			      OR LOWER(name) LIKE '%%indirect expense%%'
+			      OR LOWER(name) LIKE '%%factory overhead%%'
+			      OR LOWER(name) LIKE '%%production%%'
+			      OR LOWER(name) LIKE '%%manufacturing%%'
+			      OR LOWER(name) LIKE '%%raw material%%'
+			      OR LOWER(name) LIKE '%%stock in hand%%'
+			      OR LOWER(name) LIKE '%%work in progress%%'
+			  )
+		""", (company, company), as_dict=1)
+		for r in name_accs:
+			cos_accounts.add(r.name)
+	except Exception:
+		pass
+
+	return cos_accounts
+
+
+def get_gl_cost_of_sales(company, from_date, to_date):
+	"""
+	Calculates Cost of Sales for Profit and Loss directly from GL accounts (Cost of Goods Sold / Cost of Sales).
+	Cash Book production entries (Direct Cost, Indirect Cost) are excluded since they belong to the Cost of Sales report.
+	"""
+	if not company:
+		return 0.0
+
+	res = frappe.db.sql("""
+		SELECT SUM(gl.debit - gl.credit) as balance
+		FROM `tabGL Entry` gl
+		INNER JOIN `tabAccount` acc ON gl.account = acc.name
+		WHERE gl.company = %s
+		  AND gl.posting_date BETWEEN %s AND %s
+		  AND gl.is_cancelled = 0
+		  AND (
+		      acc.account_type = 'Cost of Goods Sold'
+		      OR LOWER(acc.name) LIKE '%%cost of sales%%'
+		      OR LOWER(acc.name) LIKE '%%cost of goods sold%%'
+		  )
+	""", (company, from_date, to_date), as_dict=1)
+
+	if res and res[0].balance:
+		return abs(flt(res[0].balance))
+	return 0.0
+
+
 def build_profit_loss_data(company, from_date, to_date, prev_from_date, prev_to_date, compare_prev, show_inflation, inflation_factor_curr, inflation_factor_prev, currency, company_title):
+
 	gl_map_curr = get_gl_entries_by_account(company, from_date, to_date)
 	gl_map_prev = get_gl_entries_by_account(company, prev_from_date, prev_to_date) if compare_prev else {}
 
 	# Fetch Cash Book classified totals if any
-	cb_totals_curr = get_cash_book_classified_totals(company, from_date, to_date)
-	cb_totals_prev = get_cash_book_classified_totals(company, prev_from_date, prev_to_date) if compare_prev else {}
+	cos_accounts = get_cost_of_sales_accounts(company)
 
-	# Helper to sum balances by custom_cost_type
+	# Strictly remove all production, direct cost, and indirect cost accounts from GL entries
+	for a in list(gl_map_curr.keys()):
+		if a in cos_accounts or gl_map_curr[a].get("account") in cos_accounts:
+			gl_map_curr.pop(a, None)
+
+	for a in list(gl_map_prev.keys()):
+		if a in cos_accounts or gl_map_prev[a].get("account") in cos_accounts:
+			gl_map_prev.pop(a, None)
+
+	# Fetch Cash Book classified totals excluding all production/direct/indirect accounts
+	cb_totals_curr = get_cash_book_classified_totals(company, from_date, to_date, exclude_accounts=cos_accounts)
+	cb_totals_prev = get_cash_book_classified_totals(company, prev_from_date, prev_to_date, exclude_accounts=cos_accounts) if compare_prev else {}
+
+	# Helper to sum balances by custom_cost_type (strictly excluding Direct Cost and Indirect Cost)
 	def get_classified_total(cost_type, gl_map):
 		tot = 0.0
 		for acc, row in gl_map.items():
+			if acc in cos_accounts or row.get("account") in cos_accounts:
+				continue
 			if row.get("custom_cost_type") == cost_type:
 				tot += flt(row.get("balance"))
 		return tot
@@ -172,15 +284,16 @@ def build_profit_loss_data(company, from_date, to_date, prev_from_date, prev_to_
 			if rev_prev == 0.0:
 				rev_prev += bal
 
-	# 2. Note 19: Cost of sales (computed directly from manufacturing / COS engine)
-	cos_data = build_cost_of_sales_data(company, from_date, to_date, prev_from_date, prev_to_date, compare_prev, currency, company_title)
-	cos_curr = 0.0
+	# 2. Note 19: Cost of sales (Standard GL Cost of Sales / COGS, separate from production Cash Book entries)
+	cos_curr = get_gl_cost_of_sales(company, from_date, to_date)
+	if cos_curr == 0.0:
+		cos_curr = query_account_balance(company, ["cost of goods sold", "cost of sales", "cogs"], gl_map_curr, exclude_accounts=cos_accounts)
+
 	cos_prev = 0.0
-	for row in cos_data:
-		if row.get("item_name", "").strip() == "Cost of sales":
-			cos_curr = flt(row.get("current_amount"))
-			cos_prev = flt(row.get("previous_amount"))
-			break
+	if compare_prev:
+		cos_prev = get_gl_cost_of_sales(company, prev_from_date, prev_to_date)
+		if cos_prev == 0.0:
+			cos_prev = query_account_balance(company, ["cost of goods sold", "cost of sales", "cogs"], gl_map_prev, exclude_accounts=cos_accounts)
 
 	# Gross Profit
 	gp_curr = rev_curr - cos_curr
@@ -210,41 +323,41 @@ def build_profit_loss_data(company, from_date, to_date, prev_from_date, prev_to_
 	total_inc_curr = gp_curr + other_inc_curr
 	total_inc_prev = gp_prev + other_inc_prev
 
-	# 4. Note 16: Distribution costs
+	# 4. Note 16: Distribution costs (Direct and Indirect costs strictly filtered out)
 	dist_curr = cb_totals_curr.get("Distribution costs", 0.0)
 	dist_prev = cb_totals_prev.get("Distribution costs", 0.0)
 	if dist_curr == 0.0:
 		dist_curr = get_classified_total("Distribution costs", gl_map_curr)
 		if dist_curr == 0.0:
-			dist_curr = query_account_balance(company, ["distribution", "freight", "forwarding", "delivery", "selling", "marketing", "carriage outward"], gl_map_curr)
+			dist_curr = query_account_balance(company, ["distribution", "freight", "forwarding", "delivery", "selling", "marketing", "carriage outward"], gl_map_curr, exclude_accounts=cos_accounts)
 	if dist_prev == 0.0 and compare_prev:
 		dist_prev = get_classified_total("Distribution costs", gl_map_prev)
 		if dist_prev == 0.0:
-			dist_prev = query_account_balance(company, ["distribution", "freight", "forwarding", "delivery", "selling", "marketing", "carriage outward"], gl_map_prev)
+			dist_prev = query_account_balance(company, ["distribution", "freight", "forwarding", "delivery", "selling", "marketing", "carriage outward"], gl_map_prev, exclude_accounts=cos_accounts)
 
-	# 5. Note 15: Administrative expenses
+	# 5. Note 15: Administrative expenses (Direct and Indirect costs strictly filtered out)
 	admin_curr = cb_totals_curr.get("Administrative expenses", 0.0)
 	admin_prev = cb_totals_prev.get("Administrative expenses", 0.0)
 	if admin_curr == 0.0:
 		admin_curr = get_classified_total("Administrative expenses", gl_map_curr)
 		if admin_curr == 0.0:
-			admin_curr = query_account_balance(company, ["administrative", "admin", "office", "stationery", "legal", "audit"], gl_map_curr)
+			admin_curr = query_account_balance(company, ["administrative", "admin", "office", "stationery", "legal", "audit"], gl_map_curr, exclude_accounts=cos_accounts)
 	if admin_prev == 0.0 and compare_prev:
 		admin_prev = get_classified_total("Administrative expenses", gl_map_prev)
 		if admin_prev == 0.0:
-			admin_prev = query_account_balance(company, ["administrative", "admin", "office", "stationery", "legal", "audit"], gl_map_prev)
+			admin_prev = query_account_balance(company, ["administrative", "admin", "office", "stationery", "legal", "audit"], gl_map_prev, exclude_accounts=cos_accounts)
 
-	# 6. Note 17: Other expenses
+	# 6. Note 17: Other expenses (Direct and Indirect costs strictly filtered out)
 	other_exp_curr = cb_totals_curr.get("Other expenses", 0.0)
 	other_exp_prev = cb_totals_prev.get("Other expenses", 0.0)
 	if other_exp_curr == 0.0:
 		other_exp_curr = get_classified_total("Other expenses", gl_map_curr)
 		if other_exp_curr == 0.0:
-			other_exp_curr = query_account_balance(company, ["other expense", "miscellaneous", "entertainment"], gl_map_curr)
+			other_exp_curr = query_account_balance(company, ["other expense", "miscellaneous", "entertainment"], gl_map_curr, exclude_accounts=cos_accounts)
 	if other_exp_prev == 0.0 and compare_prev:
 		other_exp_prev = get_classified_total("Other expenses", gl_map_prev)
 		if other_exp_prev == 0.0:
-			other_exp_prev = query_account_balance(company, ["other expense", "miscellaneous", "entertainment"], gl_map_prev)
+			other_exp_prev = query_account_balance(company, ["other expense", "miscellaneous", "entertainment"], gl_map_prev, exclude_accounts=cos_accounts)
 
 	# Total expenses
 	total_exp_curr = dist_curr + admin_curr + other_exp_curr
@@ -331,11 +444,16 @@ def build_profit_loss_data(company, from_date, to_date, prev_from_date, prev_to_
 	return data
 
 
-def get_cash_book_classified_totals(company, from_date, to_date):
+def get_cash_book_classified_totals(company, from_date, to_date, exclude_accounts=None):
 	if not company:
 		return {}
 
-	query = """
+	exclude_cond = ""
+	if exclude_accounts:
+		escaped = ", ".join([frappe.db.escape(a) for a in exclude_accounts])
+		exclude_cond = f"AND cba.account NOT IN ({escaped})"
+
+	query = f"""
 		SELECT
 			cba.type,
 			SUM(cba.debit) as total_debit,
@@ -348,8 +466,8 @@ def get_cash_book_classified_totals(company, from_date, to_date):
 			cbe.company = %s
 			AND cba.post_date BETWEEN %s AND %s
 			AND cbe.docstatus = 1
-			AND cba.type IS NOT NULL
-			AND cba.type != ''
+			AND cba.type IN ('Direct Income', 'Indirect Income', 'Distribution costs', 'Administrative expenses', 'Other expenses')
+			{exclude_cond}
 		GROUP BY
 			cba.type
 	"""
