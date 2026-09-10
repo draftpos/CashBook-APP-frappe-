@@ -207,9 +207,9 @@ def get_purchases_total(company, from_date, to_date):
 	return total_purchases
 
 
-def get_direct_materials_manufacture_cost(company, from_date, to_date):
+def get_direct_manufacture_cost(company, from_date, to_date):
 	"""
-	Calculates direct materials consumed in production from Stock Entry:
+	Calculates Direct Manufacture cost from Stock Entry:
 	Total outgoing value where stock_entry_type is Manufacture (or purpose is Manufacture)
 	filtered by posting_date between from_date and to_date, docstatus = 1.
 	"""
@@ -311,15 +311,15 @@ def build_cost_of_sales_data(company, from_date, to_date, prev_from_date, prev_t
 	cost_raw_consumed_prev = subtotal_mat_prev - close_inv_prev
 
 	# 2. Direct Costs (Direct Materials from Stock Entry Manufacture + Cash Book Type = 'Direct Cost')
-	direct_mat_curr = get_direct_materials_manufacture_cost(company, from_date, to_date)
-	direct_mat_prev = get_direct_materials_manufacture_cost(company, prev_from_date, prev_to_date) if compare_prev else 0.0
+	direct_mfg_curr = get_direct_manufacture_cost(company, from_date, to_date)
+	direct_mfg_prev = get_direct_manufacture_cost(company, prev_from_date, prev_to_date) if compare_prev else 0.0
 
 	direct_rows, tot_direct_cb_curr, tot_direct_cb_prev = get_cash_book_cost_rows(
 		company, "Direct Cost", from_date, to_date, prev_from_date, prev_to_date, compare_prev
 	)
 
-	tot_direct_curr = direct_mat_curr + tot_direct_cb_curr
-	tot_direct_prev = direct_mat_prev + tot_direct_cb_prev
+	tot_direct_curr = direct_mfg_curr + tot_direct_cb_curr
+	tot_direct_prev = direct_mfg_prev + tot_direct_cb_prev
 
 	direct_cost_production_curr = cost_raw_consumed_curr + tot_direct_curr
 	direct_cost_production_prev = cost_raw_consumed_prev + tot_direct_prev
@@ -370,7 +370,7 @@ def build_cost_of_sales_data(company, from_date, to_date, prev_from_date, prev_t
 
 	add_row("", None, None)
 	add_row("Add: Direct costs", None, None, is_bold=True, is_heading=True)
-	add_row("Direct Manufacture", direct_mat_curr, direct_mat_prev, indent=1)
+	add_row("Direct Manufacture", direct_mfg_curr, direct_mfg_prev, indent=1)
 	for label, v_c, v_p in direct_rows:
 		add_row(label, v_c, v_p, indent=1)
 	add_row("Total Direct costs", tot_direct_curr, tot_direct_prev, is_bold=True, indent=1)
