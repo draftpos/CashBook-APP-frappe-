@@ -9,6 +9,10 @@ app_include_js = "cash_book.bundle.js"
 
 doctype_js = {"Journal Entry": "public/js/journal_entry_custom.js"}
 
+override_whitelisted_methods = {
+    "frappe.desk.query_report.get_script": "cash_book.cah_book.report_overrides.custom_get_script"
+}
+
 after_install = "cash_book.setup_custom_fields.setup_all_custom_fields"
 
 fixtures = [
