@@ -86,3 +86,81 @@ def apply_gl_report_enhancements():
 
     except Exception as e:
         frappe.log_error(f"Failed to patch General Ledger report: {str(e)}", "Cash Book Report Patch")
+
+
+@frappe.whitelist()
+def custom_get_script(report_name: str):
+    """
+    Overrides frappe.desk.query_report.get_script to ensure
+    the Type filter is always embedded directly in General Ledger report JS.
+    """
+    from frappe.desk.query_report import (
+        get_report_doc,
+        get_module_path,
+        scrub,
+        get_html_format,
+        render_include
+    )
+    import os
+
+    report = get_report_doc(report_name)
+    module = report.module or frappe.db.get_value("DocType", report.ref_doctype, "module")
+    is_custom_module = frappe.get_cached_value("Module Def", module, "custom")
+    module_path = "" if is_custom_module else get_module_path(module)
+    report_folder = module_path and os.path.join(module_path, "report", scrub(report.name))
+    script_path = report_folder and os.path.join(report_folder, scrub(report.name) + ".js")
+    print_path = report_folder and os.path.join(report_folder, scrub(report.name) + ".html")
+
+    script = None
+    if os.path.exists(script_path):
+        with open(script_path) as f:
+            script = f.read()
+            script += f"\n\n//# sourceURL={scrub(report.name)}.js"
+
+    html_format = get_html_format(print_path)
+
+    if not script and report.javascript:
+        script = report.javascript
+        script += f"\n\n//# sourceURL={scrub(report.name)}__custom"
+
+    if not script:
+        script = "frappe.query_reports['{}']={{}}".format(report_name)
+
+    if report_name == "General Ledger" and script:
+        injection = """
+        (function() {
+            if (typeof frappe !== 'undefined' && frappe.query_reports && frappe.query_reports['General Ledger']) {
+                var gl = frappe.query_reports['General Ledger'];
+                if (gl.filters && Array.isArray(gl.filters)) {
+                    var exists = gl.filters.some(function(f) { return f.fieldname === 'custom_type'; });
+                    if (!exists) {
+                        var pIdx = gl.filters.findIndex(function(f) { return f.fieldname === 'project'; });
+                        var insIdx = pIdx !== -1 ? pIdx + 1 : 10;
+                        gl.filters.splice(insIdx, 0, {
+                            fieldname: 'custom_type',
+                            label: __('Type'),
+                            fieldtype: 'Select',
+                            options: [
+                                '',
+                                'Direct Cost',
+                                'Indirect Cost',
+                                'Distribution costs',
+                                'Administrative expenses',
+                                'Other expenses'
+                            ],
+                            width: '140px'
+                        });
+                    }
+                }
+            }
+        })();
+        """
+        script = script + "\n" + injection
+
+    return {
+        "script": render_include(script),
+        "html_format": html_format,
+        "execution_time": frappe.cache.hget("report_execution_time", report_name) or 0,
+        "filters": report.filters,
+        "custom_report_name": report.name if report.get("is_custom_report") else None,
+    }
