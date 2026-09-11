@@ -86,3 +86,59 @@ def test():
 
     # Call the store function
     store_bad_journals(bad_journal, bad_account)
+
+
+def set_gl_entry_type(doc, method=None):
+    """
+    Hook on GL Entry before_insert:
+    Populates custom_type on GL Entry from Journal Entry Account or Account master.
+    """
+    try:
+        if getattr(doc, "custom_type", None):
+            return
+
+        # 1. If voucher is Journal Entry, look up from Journal Entry Account row
+        if doc.voucher_type == "Journal Entry" and doc.voucher_no:
+            has_jea_custom_type = frappe.db.has_column("Journal Entry Account", "custom_type")
+            has_jea_type = frappe.db.has_column("Journal Entry Account", "type")
+            
+            field_to_get = "custom_type" if has_jea_custom_type else ("type" if has_jea_type else None)
+            if field_to_get:
+                # Try exact match on account + debit/credit
+                matched_rows = frappe.db.sql(f"""
+                    SELECT {field_to_get}
+                    FROM `tabJournal Entry Account`
+                    WHERE parent = %s
+                      AND account = %s
+                      AND (ABS(debit - %s) < 0.001 OR ABS(credit - %s) < 0.001)
+                      AND {field_to_get} IS NOT NULL
+                      AND {field_to_get} != ''
+                    LIMIT 1
+                """, (doc.voucher_no, doc.account, doc.debit or 0, doc.credit or 0), as_dict=1)
+
+                if matched_rows and matched_rows[0].get(field_to_get):
+                    doc.custom_type = matched_rows[0].get(field_to_get)
+                    return
+
+                # Try broader match on account alone
+                matched_rows = frappe.db.sql(f"""
+                    SELECT {field_to_get}
+                    FROM `tabJournal Entry Account`
+                    WHERE parent = %s
+                      AND account = %s
+                      AND {field_to_get} IS NOT NULL
+                      AND {field_to_get} != ''
+                    LIMIT 1
+                """, (doc.voucher_no, doc.account), as_dict=1)
+
+                if matched_rows and matched_rows[0].get(field_to_get):
+                    doc.custom_type = matched_rows[0].get(field_to_get)
+                    return
+
+        # 2. Fallback: Fetch default Cost Type from Account master
+        if doc.account and frappe.db.has_column("Account", "custom_cost_type"):
+            cost_type = frappe.db.get_value("Account", doc.account, "custom_cost_type")
+            if cost_type:
+                doc.custom_type = cost_type
+    except Exception as e:
+        frappe.log_error(f"Error in set_gl_entry_type: {str(e)}", "Cash Book GL Entry Hook")

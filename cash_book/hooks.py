@@ -26,7 +26,7 @@ app_license = "mit"
 
 # include js, css files in header of desk.html
 # app_include_css = "/assets/cash_book/css/cash_book.css"
-# app_include_js = "/assets/cash_book/js/cash_book.js"
+app_include_js = "/assets/cash_book/js/general_ledger_custom.js"
 
 # include js, css files in header of web template
 # web_include_css = "/assets/cash_book/css/cash_book.css"
@@ -43,7 +43,7 @@ app_license = "mit"
 # page_js = {"page" : "public/js/file.js"}
 
 # include js in doctype views
-# doctype_js = {"doctype" : "public/js/doctype.js"}
+doctype_js = {"Journal Entry": "public/js/journal_entry_custom.js"}
 # doctype_list_js = {"doctype" : "public/js/doctype_list.js"}
 # doctype_tree_js = {"doctype" : "public/js/doctype_tree.js"}
 # doctype_calendar_js = {"doctype" : "public/js/doctype_calendar.js"}
@@ -83,7 +83,7 @@ app_license = "mit"
 # ------------
 
 # before_install = "cash_book.install.before_install"
-# after_install = "cash_book.install.after_install"
+after_install = "cash_book.setup_custom_fields.setup_all_custom_fields"
 
 # Uninstallation
 # ------------
@@ -246,7 +246,7 @@ fixtures = [
     {
         "dt": "Custom Field",
         "filters": [
-            ["dt", "in", ["Cash Book Entry", "Cash Book Account", "Journal Entry", "Account"]]
+            ["dt", "in", ["Cash Book Entry", "Cash Book Account", "Journal Entry", "Journal Entry Account", "GL Entry", "Account"]]
         ]
     },
     {
@@ -261,5 +261,10 @@ fixtures = [
 doc_events = {
     "*": {
         "before_print": "cash_book.patches.before_print_patch.safe_before_print"
+    },
+    "GL Entry": {
+        "before_insert": "cash_book.cah_book.api.set_gl_entry_type"
     }
 }
+
+after_migrate = "cash_book.setup_custom_fields.setup_all_custom_fields"

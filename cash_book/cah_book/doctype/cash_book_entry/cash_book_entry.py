@@ -206,7 +206,9 @@ def create_custom_journal_entry(company, account_type, main_account, posting_dat
             "user_remark": acc.get("user_remark"),
             "account_currency": acc_currency,
             "cost_center": cost_center,
-            "project": project
+            "project": project,
+            "custom_type": acc.get("type"),
+            "type": acc.get("type")
         })
 
         # Offsetting row (Main account)
