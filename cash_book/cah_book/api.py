@@ -41,7 +41,7 @@ def find_suspicious_journal_entries():
                 })
 
     return suspicious_report
-    # 1️⃣ Function to store bad JEs/accounts safely
+
 def store_bad_journals(bad_journal, bad_account):
     """
     Takes lists of bad_journal IDs and bad_account names,
@@ -66,11 +66,8 @@ def store_bad_journals(bad_journal, bad_account):
     frappe.db.commit()
     print(f"Stored {records_inserted} records in bad_journal")
 
-
-# 2️⃣ Test function
 def test():
     suspicious_entries = find_suspicious_journal_entries()
-    
     bad_journal = []
     bad_account = []
 
@@ -79,14 +76,11 @@ def test():
         for r in entry['rows']:
             print(f"    Row {r['name']} → Account: {r['account']} | Debit: {r['debit']} / Credit: {r['credit']}")
         
-        # Add to lists only if values exist
         if entry['journal_entry'] and entry['account']:
             bad_journal.append(entry['journal_entry'])
             bad_account.append(entry['account'])
 
-    # Call the store function
     store_bad_journals(bad_journal, bad_account)
-
 
 def set_gl_entry_type(doc, method=None):
     """
@@ -106,7 +100,7 @@ def set_gl_entry_type(doc, method=None):
             if field_to_get:
                 # Try exact match on account + debit/credit
                 matched_rows = frappe.db.sql(f"""
-                    SELECT {field_to_get}
+                    SELECT {field_to_get} as ctype
                     FROM `tabJournal Entry Account`
                     WHERE parent = %s
                       AND account = %s
@@ -116,13 +110,13 @@ def set_gl_entry_type(doc, method=None):
                     LIMIT 1
                 """, (doc.voucher_no, doc.account, doc.debit or 0, doc.credit or 0), as_dict=1)
 
-                if matched_rows and matched_rows[0].get(field_to_get):
-                    doc.custom_type = matched_rows[0].get(field_to_get)
+                if matched_rows and matched_rows[0].get("ctype"):
+                    doc.custom_type = matched_rows[0].get("ctype")
                     return
 
                 # Try broader match on account alone
                 matched_rows = frappe.db.sql(f"""
-                    SELECT {field_to_get}
+                    SELECT {field_to_get} as ctype
                     FROM `tabJournal Entry Account`
                     WHERE parent = %s
                       AND account = %s
@@ -131,8 +125,24 @@ def set_gl_entry_type(doc, method=None):
                     LIMIT 1
                 """, (doc.voucher_no, doc.account), as_dict=1)
 
-                if matched_rows and matched_rows[0].get(field_to_get):
-                    doc.custom_type = matched_rows[0].get(field_to_get)
+                if matched_rows and matched_rows[0].get("ctype"):
+                    doc.custom_type = matched_rows[0].get("ctype")
+                    return
+
+            # Check if Journal Entry was created from Cash Book Entry
+            cbe_ref = frappe.db.get_value("Journal Entry", doc.voucher_no, "custom_cashbook_entry_ref")
+            if cbe_ref:
+                cba_row = frappe.db.sql("""
+                    SELECT type
+                    FROM `tabCash Book Account`
+                    WHERE parent = %s
+                      AND account = %s
+                      AND type IS NOT NULL
+                      AND type != ''
+                    LIMIT 1
+                """, (cbe_ref, doc.account), as_dict=1)
+                if cba_row and cba_row[0].get("type"):
+                    doc.custom_type = cba_row[0].get("type")
                     return
 
         # 2. Fallback: Fetch default Cost Type from Account master

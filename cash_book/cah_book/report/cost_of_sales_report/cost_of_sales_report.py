@@ -5,6 +5,7 @@ import frappe
 from frappe import _
 from frappe.utils import flt, getdate, add_years, formatdate, nowdate
 
+
 def execute(filters=None):
 	if not filters:
 		filters = {}
@@ -23,7 +24,6 @@ def execute(filters=None):
 
 	company_currency = frappe.get_cached_value("Company", company, "default_currency") if company else "USD"
 
-	# Dynamically fetch the formal company name from the selected Company document
 	company_title = ""
 	if company:
 		company_title = (
@@ -32,7 +32,6 @@ def execute(filters=None):
 			or company
 		).upper()
 
-	# Define columns
 	current_label = f"{formatdate(from_date)} - {formatdate(to_date)}"
 	prev_label = f"{formatdate(prev_from_date)} - {formatdate(prev_to_date)}"
 
@@ -61,10 +60,8 @@ def execute(filters=None):
 			"width": 170,
 		})
 
-	# Calculate statement data
 	data = build_cost_of_sales_data(company, from_date, to_date, prev_from_date, prev_to_date, compare_prev, company_currency, company_title)
 
-	# Build report summary cards
 	report_summary = []
 	for row in data:
 		if row.get("summary_key") and row.get("current_amount") is not None:
@@ -75,7 +72,6 @@ def execute(filters=None):
 				"currency": company_currency
 			})
 
-	# Dynamically generated header banner using the selected company's registered name
 	header_message = ""
 	if company_title:
 		formatted_date_str = to_date.strftime("%B %d, %Y")
@@ -97,17 +93,11 @@ def execute(filters=None):
 
 
 def get_raw_materials_stock(company, date_ref, is_opening=False):
-	"""
-	Calculates the valuation balance of Raw Materials at date_ref.
-	First queries the Stock Ledger for items in 'Raw Material' Item Group.
-	Falls back to GL Entry accounts matching raw material or stock in hand.
-	"""
 	if not company or not date_ref:
 		return 0.0
 
 	operator = "<" if is_opening else "<="
 
-	# 1. Stock Ledger for items belonging to Raw Material item group
 	sle_res = frappe.db.sql(f"""
 		SELECT SUM(sle.stock_value_difference) as val
 		FROM `tabStock Ledger Entry` sle
@@ -121,7 +111,6 @@ def get_raw_materials_stock(company, date_ref, is_opening=False):
 	if sle_res and sle_res[0].get("val") is not None and abs(flt(sle_res[0].val)) > 0:
 		return abs(flt(sle_res[0].val))
 
-	# 2. Fallback: GL Entry cumulative balance on accounts matching raw material or stock in hand
 	gl_res = frappe.db.sql(f"""
 		SELECT SUM(gl.debit - gl.credit) as balance
 		FROM `tabGL Entry` gl
@@ -139,13 +128,6 @@ def get_raw_materials_stock(company, date_ref, is_opening=False):
 
 
 def get_purchases_total(company, from_date, to_date):
-	"""
-	Calculates purchases for the period:
-	1. From submitted Purchase Invoices (focusing on Raw Material items, then all items).
-	2. From GL Entries with custom_type = 'Purchases' or Account custom_cost_type = 'Purchases'.
-	3. Fallback to Cash Book entries (Type = 'Purchases').
-	4. Fallback to GL entries on purchase accounts.
-	"""
 	if not company:
 		return 0.0
 
@@ -188,8 +170,9 @@ def get_purchases_total(company, from_date, to_date):
 	except Exception:
 		pass
 
-	gle_type_clause = "gl.custom_type = 'Purchases'" if has_gle_custom_type else "1=0"
-	acc_type_clause = "(acc.custom_cost_type = 'Purchases' AND (gl.custom_type IS NULL OR gl.custom_type = ''))" if (has_acc_custom_cost_type and has_gle_custom_type) else ("acc.custom_cost_type = 'Purchases'" if has_acc_custom_cost_type else "1=0")
+	effective_type_expr = "COALESCE(NULLIF(gl.custom_type, ''), acc.custom_cost_type)" if (has_gle_custom_type and has_acc_custom_cost_type) else (
+		"gl.custom_type" if has_gle_custom_type else ("acc.custom_cost_type" if has_acc_custom_cost_type else "''")
+	)
 
 	gl_cb_purchases = frappe.db.sql(f"""
 		SELECT SUM(gl.debit - gl.credit) as total
@@ -198,13 +181,12 @@ def get_purchases_total(company, from_date, to_date):
 		WHERE gl.company = %s
 		  AND gl.posting_date BETWEEN %s AND %s
 		  AND gl.is_cancelled = 0
-		  AND ({gle_type_clause} OR {acc_type_clause})
+		  AND {effective_type_expr} = 'Purchases'
 	""", (company, from_date, to_date), as_dict=1)
 
 	if gl_cb_purchases and gl_cb_purchases[0].get("total") is not None and flt(gl_cb_purchases[0].total) > 0:
 		total_purchases += flt(gl_cb_purchases[0].total)
 	else:
-		# Fallback to Cash Book entries
 		cb_purchases = frappe.db.sql("""
 			SELECT SUM(CASE WHEN cba.debit > 0 THEN cba.debit ELSE cba.credit END) as total
 			FROM `tabCash Book Account` cba
@@ -217,7 +199,6 @@ def get_purchases_total(company, from_date, to_date):
 		if cb_purchases and cb_purchases[0].get("total") is not None and flt(cb_purchases[0].total) > 0:
 			total_purchases += flt(cb_purchases[0].total)
 
-	# 3. Fallback to GL Entry purchases if still zero
 	if total_purchases == 0.0:
 		gl_purchases = frappe.db.sql("""
 			SELECT SUM(gl.debit - gl.credit) as balance
@@ -235,11 +216,6 @@ def get_purchases_total(company, from_date, to_date):
 
 
 def get_direct_manufacture_cost(company, from_date, to_date):
-	"""
-	Calculates Direct Manufacture cost from Stock Entry:
-	Total outgoing value where stock_entry_type is Manufacture (or purpose is Manufacture)
-	filtered by posting_date between from_date and to_date, docstatus = 1.
-	"""
 	if not company or not from_date or not to_date:
 		return 0.0
 
@@ -261,8 +237,10 @@ def get_direct_manufacture_cost(company, from_date, to_date):
 def get_gl_cost_rows(company, cost_type, from_date, to_date, prev_from_date=None, prev_to_date=None, compare_prev=0):
 	"""
 	Fetches accounts linked in General Ledger (GL Entry) categorized by cost_type (e.g. 'Direct Cost', 'Indirect Cost').
-	Returns a list of tuples: (account_display_name, current_amount, previous_amount)
-	and totals.
+	Multi-tiered lookup:
+	1. GL Entry.custom_type / Account.custom_cost_type
+	2. Cash Book Entry tagged accounts
+	3. Standard Chart of Accounts keyword fallback (if not tagged)
 	"""
 	if not company:
 		return [], 0.0, 0.0
@@ -278,40 +256,58 @@ def get_gl_cost_rows(company, cost_type, from_date, to_date, prev_from_date=None
 	except Exception:
 		pass
 
-	gle_type_clause = "gl.custom_type = %s" if has_gle_custom_type else "1=0"
-	acc_type_clause = "(acc.custom_cost_type = %s AND (gl.custom_type IS NULL OR gl.custom_type = ''))" if (has_acc_custom_cost_type and has_gle_custom_type) else ("acc.custom_cost_type = %s" if has_acc_custom_cost_type else "1=0")
+	effective_type_expr = "COALESCE(NULLIF(gl.custom_type, ''), acc.custom_cost_type)" if (has_gle_custom_type and has_acc_custom_cost_type) else (
+		"gl.custom_type" if has_gle_custom_type else ("acc.custom_cost_type" if has_acc_custom_cost_type else "''")
+	)
 
-	query = f"""
-		SELECT
-			gl.account,
-			COALESCE(acc.account_name, gl.account) as account_name,
-			SUM(gl.debit - gl.credit) as net_debit,
-			SUM(gl.debit) as total_debit,
-			SUM(gl.credit) as total_credit
-		FROM
-			`tabGL Entry` gl
-		LEFT JOIN
-			`tabAccount` acc ON gl.account = acc.name
-		WHERE
-			gl.company = %s
-			AND gl.posting_date BETWEEN %s AND %s
-			AND gl.is_cancelled = 0
-			AND ( {gle_type_clause} OR {acc_type_clause} )
-		GROUP BY
-			gl.account
-		ORDER BY
-			account_name ASC
-	"""
+	# Keywords for fallback
+	fallback_keywords = []
+	if cost_type == "Direct Cost":
+		fallback_keywords = ["direct labour", "direct labor", "direct expense", "direct material", "electricity - direct", "direct wages", "direct cost"]
+	elif cost_type == "Indirect Cost":
+		fallback_keywords = ["indirect labour", "indirect labor", "indirect expense", "factory overhead", "factory rent", "factory electricity", "factory maintenance", "repairs and maintenance", "plant & machinery", "plant maintenance"]
 
-	res_curr = frappe.db.sql(query, (company, from_date, to_date, cost_type, cost_type), as_dict=1)
+	def fetch_data_for_period(f_date, t_date):
+		account_data = {}
 
-	# Fallback if no GL entries found: check Cash Book Account child table directly
-	if not res_curr:
+		# 1. Query GL Entries by custom_type / custom_cost_type
+		query_gl = f"""
+			SELECT
+				gl.account,
+				COALESCE(acc.account_name, gl.account) as account_name,
+				SUM(gl.debit - gl.credit) as net_debit
+			FROM
+				`tabGL Entry` gl
+			LEFT JOIN
+				`tabAccount` acc ON gl.account = acc.name
+			WHERE
+				gl.company = %s
+				AND gl.posting_date BETWEEN %s AND %s
+				AND gl.is_cancelled = 0
+				AND {effective_type_expr} = %s
+			GROUP BY
+				gl.account
+			ORDER BY
+				account_name ASC
+		"""
+		try:
+			res_gl = frappe.db.sql(query_gl, (company, f_date, t_date, cost_type), as_dict=1)
+			for r in res_gl:
+				amt = flt(r.get("net_debit"))
+				if amt != 0:
+					account_data[r.account] = {
+						"label": r.account_name or r.account,
+						"amount": amt
+					}
+		except Exception:
+			pass
+
+		# 2. Also check Cash Book Entries directly for any tagged rows not yet captured
 		cb_query = """
 			SELECT
 				cba.account,
 				COALESCE(acc.account_name, cba.account) as account_name,
-				SUM(CASE WHEN cba.debit > 0 THEN cba.debit ELSE cba.credit END) as net_debit
+				SUM(cba.debit - cba.credit) as net_debit
 			FROM
 				`tabCash Book Account` cba
 			INNER JOIN
@@ -328,51 +324,59 @@ def get_gl_cost_rows(company, cost_type, from_date, to_date, prev_from_date=None
 			ORDER BY
 				account_name ASC
 		"""
-		res_curr = frappe.db.sql(cb_query, (company, from_date, to_date, cost_type), as_dict=1)
+		try:
+			res_cb = frappe.db.sql(cb_query, (company, f_date, t_date, cost_type), as_dict=1)
+			for r in res_cb:
+				if r.account not in account_data:
+					amt = flt(r.get("net_debit"))
+					if amt != 0:
+						account_data[r.account] = {
+							"label": r.account_name or r.account,
+							"amount": amt
+						}
+		except Exception:
+			pass
 
-	curr_map = {}
-	for r in res_curr:
-		amt = flt(r.get("net_debit") or (flt(r.get("total_debit", 0)) - flt(r.get("total_credit", 0))))
-		if amt > 0:
-			curr_map[r.account] = {
-				"label": r.account_name or r.account,
-				"amount": amt
-			}
-
-	prev_map = {}
-	if compare_prev and prev_from_date and prev_to_date:
-		res_prev = frappe.db.sql(query, (company, prev_from_date, prev_to_date, cost_type, cost_type), as_dict=1)
-		if not res_prev:
-			cb_query = """
+		# 3. Fallback: Check GL Entries for untagged expense accounts matching standard naming
+		if fallback_keywords:
+			kw_conditions = " OR ".join([f"LOWER(acc.name) LIKE {frappe.db.escape('%' + k + '%')}" for k in fallback_keywords])
+			fallback_query = f"""
 				SELECT
-					cba.account,
-					COALESCE(acc.account_name, cba.account) as account_name,
-					SUM(CASE WHEN cba.debit > 0 THEN cba.debit ELSE cba.credit END) as net_debit
+					gl.account,
+					COALESCE(acc.account_name, gl.account) as account_name,
+					SUM(gl.debit - gl.credit) as net_debit
 				FROM
-					`tabCash Book Account` cba
+					`tabGL Entry` gl
 				INNER JOIN
-					`tabCash Book Entry` cbe ON cba.parent = cbe.name
-				LEFT JOIN
-					`tabAccount` acc ON cba.account = acc.name
+					`tabAccount` acc ON gl.account = acc.name
 				WHERE
-					cbe.company = %s
-					AND cba.post_date BETWEEN %s AND %s
-					AND cbe.docstatus = 1
-					AND cba.type = %s
+					gl.company = %s
+					AND gl.posting_date BETWEEN %s AND %s
+					AND gl.is_cancelled = 0
+					AND ({effective_type_expr} IS NULL OR {effective_type_expr} = '')
+					AND ({kw_conditions})
 				GROUP BY
-					cba.account
+					gl.account
 				ORDER BY
 					account_name ASC
 			"""
-			res_prev = frappe.db.sql(cb_query, (company, prev_from_date, prev_to_date, cost_type), as_dict=1)
+			try:
+				res_fb = frappe.db.sql(fallback_query, (company, f_date, t_date), as_dict=1)
+				for r in res_fb:
+					if r.account not in account_data:
+						amt = flt(r.get("net_debit"))
+						if amt != 0:
+							account_data[r.account] = {
+								"label": r.account_name or r.account,
+								"amount": amt
+							}
+			except Exception:
+				pass
 
-		for r in res_prev:
-			amt = flt(r.get("net_debit") or (flt(r.get("total_debit", 0)) - flt(r.get("total_credit", 0))))
-			if amt > 0:
-				prev_map[r.account] = {
-					"label": r.account_name or r.account,
-					"amount": amt
-				}
+		return account_data
+
+	curr_map = fetch_data_for_period(from_date, to_date)
+	prev_map = fetch_data_for_period(prev_from_date, prev_to_date) if (compare_prev and prev_from_date and prev_to_date) else {}
 
 	all_accounts = sorted(set(list(curr_map.keys()) + list(prev_map.keys())))
 	rows = []
@@ -502,9 +506,6 @@ def build_cost_of_sales_data(company, from_date, to_date, prev_from_date, prev_t
 
 
 def query_finished_goods_stock(company, date_ref, gl_map):
-	"""
-	Calculates closing stock of finished goods from stock ledger or finished goods accounts.
-	"""
 	if not company or not date_ref:
 		return 0.0
 

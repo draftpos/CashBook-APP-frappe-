@@ -10,6 +10,7 @@ from cash_book.cah_book.report.cost_of_sales_report.cost_of_sales_report import 
 	build_cost_of_sales_data
 )
 
+
 def execute(filters=None):
 	if not filters:
 		filters = {}
@@ -140,7 +141,7 @@ def get_cost_of_sales_accounts(company):
 	"""
 	Returns all accounts associated with Cost of Sales, Direct Cost, Indirect Cost, and Production:
 	Filters by GL Entry tags, Cash Book tags, and account name/type.
-	These accounts and entries MUST NEVER appear in Profit & Loss general expenses.
+	These accounts and entries MUST NEVER appear in Profit & Loss general operating expenses.
 	"""
 	cos_accounts = set()
 	if not company:
@@ -190,7 +191,7 @@ def get_cost_of_sales_accounts(company):
 	except Exception:
 		pass
 
-	# 4. Any account with Direct, Indirect, Production, Factory, Manufacturing, Stock, or COGS in name/type
+	# 4. Any account explicitly for direct manufacture, raw material, stock, or COGS
 	try:
 		name_accs = frappe.db.sql("""
 			SELECT name FROM `tabAccount`
@@ -205,11 +206,10 @@ def get_cost_of_sales_accounts(company):
 			      OR LOWER(name) LIKE '%%direct -%%'
 			      OR LOWER(name) LIKE '%%indirect labour%%'
 			      OR LOWER(name) LIKE '%%indirect labor%%'
-			      OR LOWER(name) LIKE '%%indirect expense%%'
 			      OR LOWER(name) LIKE '%%factory overhead%%'
-			      OR LOWER(name) LIKE '%%repairs and maintenance%%'
-			      OR LOWER(name) LIKE '%%repair%%'
-			      OR LOWER(name) LIKE '%%maintenance%%'
+			      OR LOWER(name) LIKE '%%factory rent%%'
+			      OR LOWER(name) LIKE '%%factory electricity%%'
+			      OR LOWER(name) LIKE '%%factory maintenance%%'
 			      OR LOWER(name) LIKE '%%production%%'
 			      OR LOWER(name) LIKE '%%manufacturing%%'
 			      OR LOWER(name) LIKE '%%raw material%%'
@@ -274,7 +274,11 @@ def get_gl_classified_totals(company, from_date, to_date, exclude_accounts=None)
 			cost_type
 	"""
 
-	entries = frappe.db.sql(query, (company, from_date, to_date), as_dict=1)
+	try:
+		entries = frappe.db.sql(query, (company, from_date, to_date), as_dict=1)
+	except Exception:
+		entries = []
+
 	totals = {}
 	for r in entries:
 		t = r.get("cost_type")
@@ -334,7 +338,6 @@ def build_profit_loss_data(company, from_date, to_date, prev_from_date, prev_to_
 	gl_totals_curr = get_gl_classified_totals(company, from_date, to_date, exclude_accounts=cos_accounts)
 	gl_totals_prev = get_gl_classified_totals(company, prev_from_date, prev_to_date, exclude_accounts=cos_accounts) if compare_prev else {}
 
-	# Helper to sum balances by custom_cost_type (strictly excluding Direct Cost and Indirect Cost)
 	def get_classified_total(cost_type, gl_map):
 		tot = 0.0
 		for acc, row in gl_map.items():
@@ -351,7 +354,7 @@ def build_profit_loss_data(company, from_date, to_date, prev_from_date, prev_to_
 		r_type = (row.get("root_type") or "").lower()
 		c_type = row.get("custom_cost_type") or ""
 		acc_name = (row.get("account_name") or "").lower()
-		if c_type == "Direct Income" or (not c_type and r_type == "income" and any(k in acc_name for k in ["sales", "direct income", "revenue"])):
+		if c_type == "Direct Income" or (not c_type and r_type == "income" and any(k in acc_name for k in ["sales", "direct income", "revenue", "fee"])):
 			bal = flt(row.total_credit) - flt(row.total_debit)
 			if rev_curr == 0.0:
 				rev_curr += bal
@@ -359,7 +362,7 @@ def build_profit_loss_data(company, from_date, to_date, prev_from_date, prev_to_
 		r_type = (row.get("root_type") or "").lower()
 		c_type = row.get("custom_cost_type") or ""
 		acc_name = (row.get("account_name") or "").lower()
-		if c_type == "Direct Income" or (not c_type and r_type == "income" and any(k in acc_name for k in ["sales", "direct income", "revenue"])):
+		if c_type == "Direct Income" or (not c_type and r_type == "income" and any(k in acc_name for k in ["sales", "direct income", "revenue", "fee"])):
 			bal = flt(row.total_credit) - flt(row.total_debit)
 			if rev_prev == 0.0:
 				rev_prev += bal
@@ -386,7 +389,7 @@ def build_profit_loss_data(company, from_date, to_date, prev_from_date, prev_to_
 		r_type = (row.get("root_type") or "").lower()
 		c_type = row.get("custom_cost_type") or ""
 		acc_name = (row.get("account_name") or "").lower()
-		if c_type == "Indirect Income" or (not c_type and r_type == "income" and not any(k in acc_name for k in ["sales", "direct income", "revenue"])):
+		if c_type == "Indirect Income" or (not c_type and r_type == "income" and not any(k in acc_name for k in ["sales", "direct income", "revenue", "fee"])):
 			bal = flt(row.total_credit) - flt(row.total_debit)
 			if other_inc_curr == 0.0:
 				other_inc_curr += bal
@@ -394,7 +397,7 @@ def build_profit_loss_data(company, from_date, to_date, prev_from_date, prev_to_
 		r_type = (row.get("root_type") or "").lower()
 		c_type = row.get("custom_cost_type") or ""
 		acc_name = (row.get("account_name") or "").lower()
-		if c_type == "Indirect Income" or (not c_type and r_type == "income" and not any(k in acc_name for k in ["sales", "direct income", "revenue"])):
+		if c_type == "Indirect Income" or (not c_type and r_type == "income" and not any(k in acc_name for k in ["sales", "direct income", "revenue", "fee"])):
 			bal = flt(row.total_credit) - flt(row.total_debit)
 			if other_inc_prev == 0.0:
 				other_inc_prev += bal
@@ -406,38 +409,58 @@ def build_profit_loss_data(company, from_date, to_date, prev_from_date, prev_to_
 	# 4. Note 16: Distribution costs (Direct and Indirect costs strictly filtered out)
 	dist_curr = gl_totals_curr.get("Distribution costs", 0.0)
 	dist_prev = gl_totals_prev.get("Distribution costs", 0.0)
+	dist_keywords = ["distribution", "freight", "forwarding", "delivery", "selling", "marketing", "carriage outward", "commission", "transport", "shipping", "logistics", "advertising", "sales expense"]
+	
 	if dist_curr == 0.0:
 		dist_curr = get_classified_total("Distribution costs", gl_map_curr)
 		if dist_curr == 0.0:
-			dist_curr = query_account_balance(company, ["distribution", "freight", "forwarding", "delivery", "selling", "marketing", "carriage outward"], gl_map_curr, exclude_accounts=cos_accounts)
+			dist_curr = query_account_balance(company, dist_keywords, gl_map_curr, exclude_accounts=cos_accounts)
 	if dist_prev == 0.0 and compare_prev:
 		dist_prev = get_classified_total("Distribution costs", gl_map_prev)
 		if dist_prev == 0.0:
-			dist_prev = query_account_balance(company, ["distribution", "freight", "forwarding", "delivery", "selling", "marketing", "carriage outward"], gl_map_prev, exclude_accounts=cos_accounts)
+			dist_prev = query_account_balance(company, dist_keywords, gl_map_prev, exclude_accounts=cos_accounts)
 
 	# 5. Note 15: Administrative expenses (Direct and Indirect costs strictly filtered out)
 	admin_curr = gl_totals_curr.get("Administrative expenses", 0.0)
 	admin_prev = gl_totals_prev.get("Administrative expenses", 0.0)
+	admin_keywords = ["administrative", "admin", "office", "stationery", "legal", "audit", "salary", "salaries", "payroll", "office rent", "telephone", "postal", "postage", "communication", "insurance", "professional fee", "consulting", "bank charge", "rates"]
+
 	if admin_curr == 0.0:
 		admin_curr = get_classified_total("Administrative expenses", gl_map_curr)
 		if admin_curr == 0.0:
-			admin_curr = query_account_balance(company, ["administrative", "admin", "office", "stationery", "legal", "audit"], gl_map_curr, exclude_accounts=cos_accounts)
+			admin_curr = query_account_balance(company, admin_keywords, gl_map_curr, exclude_accounts=cos_accounts)
 	if admin_prev == 0.0 and compare_prev:
 		admin_prev = get_classified_total("Administrative expenses", gl_map_prev)
 		if admin_prev == 0.0:
-			admin_prev = query_account_balance(company, ["administrative", "admin", "office", "stationery", "legal", "audit"], gl_map_prev, exclude_accounts=cos_accounts)
+			admin_prev = query_account_balance(company, admin_keywords, gl_map_prev, exclude_accounts=cos_accounts)
 
 	# 6. Note 17: Other expenses (Direct and Indirect costs strictly filtered out)
 	other_exp_curr = gl_totals_curr.get("Other expenses", 0.0)
 	other_exp_prev = gl_totals_prev.get("Other expenses", 0.0)
+	other_keywords = ["other expense", "miscellaneous", "entertainment", "travel", "utility", "utilities", "water", "electricity", "cleaning", "security", "depreciation", "impairment", "write off", "round off", "general"]
+
 	if other_exp_curr == 0.0:
 		other_exp_curr = get_classified_total("Other expenses", gl_map_curr)
 		if other_exp_curr == 0.0:
-			other_exp_curr = query_account_balance(company, ["other expense", "miscellaneous", "entertainment"], gl_map_curr, exclude_accounts=cos_accounts)
+			other_exp_curr = query_account_balance(company, other_keywords, gl_map_curr, exclude_accounts=cos_accounts)
+			# Fallback: Capture any remaining unallocated expense account balances
+			if other_exp_curr == 0.0:
+				for acc, row in gl_map_curr.items():
+					r_type = (row.get("root_type") or "").lower()
+					acc_lower = (row.get("account_name") or acc).lower()
+					if r_type == "expense" and not any(k in acc_lower for k in dist_keywords + admin_keywords):
+						other_exp_curr += flt(row.balance)
+
 	if other_exp_prev == 0.0 and compare_prev:
 		other_exp_prev = get_classified_total("Other expenses", gl_map_prev)
 		if other_exp_prev == 0.0:
-			other_exp_prev = query_account_balance(company, ["other expense", "miscellaneous", "entertainment"], gl_map_prev, exclude_accounts=cos_accounts)
+			other_exp_prev = query_account_balance(company, other_keywords, gl_map_prev, exclude_accounts=cos_accounts)
+			if other_exp_prev == 0.0:
+				for acc, row in gl_map_prev.items():
+					r_type = (row.get("root_type") or "").lower()
+					acc_lower = (row.get("account_name") or acc).lower()
+					if r_type == "expense" and not any(k in acc_lower for k in dist_keywords + admin_keywords):
+						other_exp_prev += flt(row.balance)
 
 	# Total expenses
 	total_exp_curr = dist_curr + admin_curr + other_exp_curr
