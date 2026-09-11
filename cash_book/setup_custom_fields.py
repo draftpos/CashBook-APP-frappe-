@@ -16,7 +16,7 @@ CUSTOM_FIELDS = {
             "fieldname": "custom_type",
             "fieldtype": "Select",
             "label": "Type",
-            "options": "\nDirect Cost\nIndirect Cost\nDirect Income\nIndirect Income\nDistribution costs\nAdministrative expenses\nOther expenses\nPurchases",
+            "options": "\nDirect Cost\nIndirect Cost\nDistribution costs\nAdministrative expenses\nOther expenses",
             "in_list_view": 1,
             "in_preview": 1,
             "in_standard_filter": 1,
@@ -29,7 +29,7 @@ CUSTOM_FIELDS = {
             "fieldname": "custom_type",
             "fieldtype": "Select",
             "label": "Type",
-            "options": "\nDirect Cost\nIndirect Cost\nDirect Income\nIndirect Income\nDistribution costs\nAdministrative expenses\nOther expenses\nPurchases",
+            "options": "\nDirect Cost\nIndirect Cost\nDistribution costs\nAdministrative expenses\nOther expenses",
             "in_list_view": 1,
             "in_preview": 1,
             "in_standard_filter": 1,
@@ -42,7 +42,7 @@ CUSTOM_FIELDS = {
             "fieldname": "custom_cost_type",
             "fieldtype": "Select",
             "label": "Cost Type",
-            "options": "\nDirect Cost\nIndirect Cost\nDirect Income\nIndirect Income\nDistribution costs\nAdministrative expenses\nOther expenses\nPurchases",
+            "options": "\nDirect Cost\nIndirect Cost\nDistribution costs\nAdministrative expenses\nOther expenses",
             "in_list_view": 1,
             "in_preview": 1,
             "in_standard_filter": 1,
@@ -69,6 +69,7 @@ def sync_existing_gl_and_journal_types():
             WHERE (jea.custom_type IS NULL OR jea.custom_type = '')
               AND cba.type IS NOT NULL
               AND cba.type != ''
+              AND cba.type NOT IN ('Direct Income', 'Indirect Income', 'Purchases')
               AND je.custom_cashbook_entry_ref IS NOT NULL
         """)
 
@@ -101,6 +102,18 @@ def sync_existing_gl_and_journal_types():
             WHERE (gl.custom_type IS NULL OR gl.custom_type = '')
               AND acc.custom_cost_type IS NOT NULL
               AND acc.custom_cost_type != ''
+        """)
+
+        # Clean up any obsolete tags if previously assigned
+        frappe.db.sql("""
+            UPDATE `tabGL Entry`
+            SET custom_type = NULL
+            WHERE custom_type IN ('Direct Income', 'Indirect Income', 'Purchases')
+        """)
+        frappe.db.sql("""
+            UPDATE `tabJournal Entry Account`
+            SET custom_type = NULL
+            WHERE custom_type IN ('Direct Income', 'Indirect Income', 'Purchases')
         """)
 
         frappe.db.commit()
